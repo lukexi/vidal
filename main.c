@@ -48,7 +48,6 @@ int DoFFMPEGStuff()
     const char *filename;
     const AVCodec *codec;
     AVCodecParserContext *parser;
-    AVCodecContext *c= NULL;
     FILE *f;
     AVFrame *frame;
     uint8_t inbuf[INBUF_SIZE + AV_INPUT_BUFFER_PADDING_SIZE];
@@ -58,106 +57,90 @@ int DoFFMPEGStuff()
     AVPacket *pkt;
 
     filename    = "mario.mp4";
+    // filename    = "pinball.mov";
 
     av_register_all();
 
     pkt = av_packet_alloc();
-    if (!pkt)
+    if (!pkt) {
+        printf("Couldn't allocate packet.\n");
         exit(1);
+    }
 
     /* set end of buffer to 0 (this ensures that no overreading happens for damaged MPEG streams) */
     memset(inbuf + INBUF_SIZE, 0, AV_INPUT_BUFFER_PADDING_SIZE);
 
     /* find the video decoder */
 
-    AVFormatContext *pFormatCtx = NULL;
+    AVFormatContext *formatContext = avformat_alloc_context();
 
     // Open video file
-    if (avformat_open_input(&pFormatCtx, filename, NULL, NULL) != 0) {
+    if (avformat_open_input(&formatContext, filename, NULL, NULL) != 0) {
         printf("Couldn't open file\n");
         exit(1); //
     }
 
     // Retrieve stream information
-    if(avformat_find_stream_info(pFormatCtx, NULL)<0) {
+    if (avformat_find_stream_info(formatContext, NULL) < 0) {
         fprintf(stderr, "Codec not found\n");
         exit(1); // Couldn't find stream information
     }
     // Dump information about file onto standard error
-    av_dump_format(pFormatCtx, 0, filename, 0);
+    av_dump_format(formatContext, 0, filename, 0);
 
-    int i;
+
     int videoStream;
-    AVCodecContext *codecCtxOrig = NULL;
-    AVCodecContext *codecCtx = NULL;
+    AVCodecParameters *CodecParams = NULL;
+
+    CodecParams = formatContext->streams[videoStream]->codecpar;
+
+    codec = avcodec_find_decoder(CodecParams->codec_id);
+    if (!codec) {
+        av_log(NULL, AV_LOG_ERROR, "Can't find decoder\n");
+        return -1;
+    }
+
+    AVCodecContext* codecContext = avcodec_alloc_context3(codec);
+    if (!codecContext) {
+        av_log(NULL, AV_LOG_ERROR, "Can't allocate decoder context\n");
+        return AVERROR(ENOMEM);
+    }
+
+    // Copy video parameters to our CodecContext
+    ret = avcodec_parameters_to_context(codecContext, CodecParams);
+    if (ret) {
+        av_log(NULL, AV_LOG_ERROR, "Can't copy decoder context\n");
+        return ret;
+    }
 
     // Find the first video stream
-    videoStream=-1;
-    for(i=0; i<pFormatCtx->nb_streams; i++)
-      if(pFormatCtx->streams[i]->codec->codec_type==AVMEDIA_TYPE_VIDEO) {
-        videoStream=i;
-        break;
-      }
-    if(videoStream==-1)
-      return -1; // Didn't find a video stream
+    videoStream = av_find_best_stream(formatContext, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
 
-    // Get a pointer to the codec context for the video stream
-    codecCtx = pFormatCtx->streams[videoStream]->codec;
-
-    printf("FA\n");
-    // AVCodec *codec = NULL;
-
-    // Find the decoder for the video stream
-    codec = avcodec_find_decoder(codecCtx->codec_id);
-    if(codec==NULL) {
-      fprintf(stderr, "Unsupported codec!\n");
-      return -1; // Codec not found
+    if (videoStream == -1) {
+        printf("Couldn't find a video stream\n");
+        return -1;
     }
-    printf("Hi\n");
-    // Copy context
-    // codecCtx = avcodec_alloc_context3(codec);
-    // printf("Copying\n");
-    // if(avcodec_copy_context(codecCtx, codecCtxOrig) != 0) {
-    //   fprintf(stderr, "Couldn't copy codec context");
-    //   return -1; // Error copying codec context
-    // }
-    // Open codec
-    printf("FUF\n");
-    AVDictionary* opts;
-    av_dict_set(&opts, "b", "2.5M", 0);
-    if(avcodec_open2(codecCtx, codec, &opts)<0)
-      return -1; // Could not open codec
+    printf("Found a video stream.\n");
 
-    // codec = avcodec_find_decoder(AV_CODEC_ID_H264);
-    // if (!codec) {
-    //     fprintf(stderr, "Codec not found\n");
-    //     exit(1);
-    // }
+    // Open codec
 
     parser = av_parser_init(codec->id);
     if (!parser) {
         fprintf(stderr, "parser not found\n");
         exit(1);
     }
-    printf("FEH\n");
-
-    c = avcodec_alloc_context3(codec);
-    if (!c) {
-        fprintf(stderr, "Could not allocate video codec context\n");
-        exit(1);
-    }
-    printf("FED\n");
+    printf("Initialized parser.\n");
 
     /* For some codecs, such as msmpeg4 and mpeg4, width and height
        MUST be initialized there because this information is not
        available in the bitstream. */
 
     /* open it */
-    if (avcodec_open2(c, codec, NULL) < 0) {
+    if (avcodec_open2(codecContext, codec, NULL) < 0) {
         fprintf(stderr, "Could not open codec\n");
         exit(1);
     }
-    printf("FEL\n");
+    printf("Opened codec.\n");
 
     f = fopen(filename, "rb");
     if (!f) {
@@ -170,18 +153,19 @@ int DoFFMPEGStuff()
         fprintf(stderr, "Could not allocate video frame\n");
         exit(1);
     }
-    printf("FER\n");
+    printf("Allocated frame.\n");
 
     while (!feof(f)) {
+        printf("Reading a chunk of %i\n", INBUF_SIZE);
         /* read raw data from the input file */
         data_size = fread(inbuf, 1, INBUF_SIZE, f);
         if (!data_size)
             break;
-        printf("FE\n");
+
         /* use the parser to split the data into frames */
         data = inbuf;
         while (data_size > 0) {
-            ret = av_parser_parse2(parser, c, &pkt->data, &pkt->size,
+            ret = av_parser_parse2(parser, codecContext, &pkt->data, &pkt->size,
                                    data, data_size, AV_NOPTS_VALUE, AV_NOPTS_VALUE, 0);
             if (ret < 0) {
                 fprintf(stderr, "Error while parsing\n");
@@ -189,20 +173,20 @@ int DoFFMPEGStuff()
             }
             data      += ret;
             data_size -= ret;
-            printf("%i\n", pkt->size);
+            printf("Packet size is now %i\n", pkt->size);
             if (pkt->size)
-                decode(c, frame, pkt);
+                decode(codecContext, frame, pkt);
         }
     }
-    printf("FO\n");
+    printf("File ended.\n");
 
     /* flush the decoder */
-    decode(c, frame, NULL);
+    decode(codecContext, frame, NULL);
 
     fclose(f);
 
     av_parser_close(parser);
-    avcodec_free_context(&c);
+    avcodec_free_context(&codecContext);
     av_frame_free(&frame);
     av_packet_free(&pkt);
 

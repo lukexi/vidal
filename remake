@@ -1,2 +1,2 @@
 #!/bin/bash
-ls *.c | entr -rcs "make && ./vital.app"
+ls *.c | entr -rs "make && ./vital.app"
