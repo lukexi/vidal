@@ -1,7 +1,7 @@
-all: veil
+all: vital
 
-FLAGS=`pkg-config --libs --cflags SDL2 GLEW`
+FLAGS=`pkg-config --libs --cflags SDL2 GLEW libavcodec libavformat`
 FLAGS+=-framework OpenGL
 
-veil: main.c shader.c
-	clang -o $@.app $^ $(FLAGS)
+vital: main.c shader.c quad.c
+	clang -o $@.app $^ $(FLAGS) -g
