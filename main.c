@@ -2,204 +2,196 @@
 #include <GL/glew.h>
 #include "shader.h"
 #include "quad.h"
-#include <libavcodec/avcodec.h>
-#include <libavformat/avformat.h>
+#include "texture.h"
 
-#define INBUF_SIZE 4096
+/**
+ * H264 codec test.
+ */
 
-static void decode(AVCodecContext *dec_ctx, AVFrame *frame, AVPacket *pkt)
+#include "libavutil/adler32.h"
+#include "libavcodec/avcodec.h"
+#include "libavformat/avformat.h"
+#include "libavutil/imgutils.h"
+
+#include "libavutil/adler32.h"
+#include "libavcodec/avcodec.h"
+#include "libavformat/avformat.h"
+#include "libavutil/imgutils.h"
+
+static int video_decode_example(const char *input_filename, SDL_Window* Window)
 {
-    char buf[1024];
-    int ret;
+    AVCodec *codec = NULL;
+    AVCodecContext *ctx= NULL;
+    AVCodecParameters *origin_par = NULL;
+    AVFrame *fr = NULL;
+    uint8_t *byte_buffer = NULL;
+    AVPacket pkt;
+    AVFormatContext *fmt_ctx = NULL;
+    int number_of_written_bytes;
+    int video_stream;
+    int got_frame = 0;
+    int byte_buffer_size;
+    int i = 0;
+    int result;
+    int end_of_stream = 0;
 
-    ret = avcodec_send_packet(dec_ctx, pkt);
-    if (ret < 0) {
-        fprintf(stderr, "Error sending a packet for decoding\n");
-        exit(1);
+    result = avformat_open_input(&fmt_ctx, input_filename, NULL, NULL);
+    if (result < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Can't open file\n");
+        return result;
     }
 
-    while (ret >= 0) {
-        ret = avcodec_receive_frame(dec_ctx, frame);
-        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-            return;
-        }
-        else if (ret < 0) {
-            fprintf(stderr, "Error during decoding\n");
-            exit(1);
-        }
-
-        printf("saving frame %3d\n", dec_ctx->frame_number);
-        fflush(stdout);
-
-        /* the picture is allocated by the decoder. no need to
-           free it */
-        snprintf(buf, sizeof(buf), "%d", dec_ctx->frame_number);
-
-        printf("Handle a frame with wrap: %i size: %i x %i\n",
-            frame->linesize[0],
-            frame->width, frame->height);
-        // pgm_save(frame->data[0], frame->linesize[0],
-        //          frame->width, frame->height, buf);
-    }
-}
-
-int DoFFMPEGStuff()
-{
-    const char *filename;
-    const AVCodec *codec;
-    AVCodecParserContext *parser;
-    FILE *f;
-    AVFrame *frame;
-    uint8_t inbuf[INBUF_SIZE + AV_INPUT_BUFFER_PADDING_SIZE];
-    uint8_t *data;
-    size_t   data_size;
-    int ret;
-    AVPacket *pkt;
-
-    filename    = "mario.mp4";
-    // filename    = "pinball.mov";
-
-    av_register_all();
-
-    pkt = av_packet_alloc();
-    if (!pkt) {
-        printf("Couldn't allocate packet.\n");
-        exit(1);
+    result = avformat_find_stream_info(fmt_ctx, NULL);
+    if (result < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Can't get stream info\n");
+        return result;
     }
 
-    /* set end of buffer to 0 (this ensures that no overreading happens for damaged MPEG streams) */
-    memset(inbuf + INBUF_SIZE, 0, AV_INPUT_BUFFER_PADDING_SIZE);
-
-    /* find the video decoder */
-
-    AVFormatContext *formatContext = avformat_alloc_context();
-
-    // Open video file
-    if (avformat_open_input(&formatContext, filename, NULL, NULL) != 0) {
-        printf("Couldn't open file\n");
-        exit(1); //
+    video_stream = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
+    if (video_stream < 0) {
+      av_log(NULL, AV_LOG_ERROR, "Can't find video stream in input file\n");
+      return -1;
     }
 
-    // Retrieve stream information
-    if (avformat_find_stream_info(formatContext, NULL) < 0) {
-        fprintf(stderr, "Codec not found\n");
-        exit(1); // Couldn't find stream information
-    }
-    // Dump information about file onto standard error
-    av_dump_format(formatContext, 0, filename, 0);
+    origin_par = fmt_ctx->streams[video_stream]->codecpar;
 
-
-    int videoStream;
-    AVCodecParameters *CodecParams = NULL;
-
-    CodecParams = formatContext->streams[videoStream]->codecpar;
-
-    codec = avcodec_find_decoder(CodecParams->codec_id);
+    codec = avcodec_find_decoder(origin_par->codec_id);
     if (!codec) {
         av_log(NULL, AV_LOG_ERROR, "Can't find decoder\n");
         return -1;
     }
 
-    AVCodecContext* codecContext = avcodec_alloc_context3(codec);
-    if (!codecContext) {
+    ctx = avcodec_alloc_context3(codec);
+    if (!ctx) {
         av_log(NULL, AV_LOG_ERROR, "Can't allocate decoder context\n");
         return AVERROR(ENOMEM);
     }
 
-    // Copy video parameters to our CodecContext
-    ret = avcodec_parameters_to_context(codecContext, CodecParams);
-    if (ret) {
+    result = avcodec_parameters_to_context(ctx, origin_par);
+    if (result) {
         av_log(NULL, AV_LOG_ERROR, "Can't copy decoder context\n");
-        return ret;
+        return result;
     }
 
-    // Find the first video stream
-    videoStream = av_find_best_stream(formatContext, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
-
-    if (videoStream == -1) {
-        printf("Couldn't find a video stream\n");
-        return -1;
-    }
-    printf("Found a video stream.\n");
-
-    // Open codec
-
-    parser = av_parser_init(codec->id);
-    if (!parser) {
-        fprintf(stderr, "parser not found\n");
-        exit(1);
-    }
-    printf("Initialized parser.\n");
-
-    /* For some codecs, such as msmpeg4 and mpeg4, width and height
-       MUST be initialized there because this information is not
-       available in the bitstream. */
-
-    /* open it */
-    if (avcodec_open2(codecContext, codec, NULL) < 0) {
-        fprintf(stderr, "Could not open codec\n");
-        exit(1);
-    }
-    printf("Opened codec.\n");
-
-    f = fopen(filename, "rb");
-    if (!f) {
-        fprintf(stderr, "Could not open %s\n", filename);
-        exit(1);
+    result = avcodec_open2(ctx, codec, NULL);
+    if (result < 0) {
+        av_log(ctx, AV_LOG_ERROR, "Can't open decoder\n");
+        return result;
     }
 
-    frame = av_frame_alloc();
-    if (!frame) {
-        fprintf(stderr, "Could not allocate video frame\n");
-        exit(1);
+    fr = av_frame_alloc();
+    if (!fr) {
+        av_log(NULL, AV_LOG_ERROR, "Can't allocate frame\n");
+        return AVERROR(ENOMEM);
     }
-    printf("Allocated frame.\n");
 
-    while (!feof(f)) {
-        printf("Reading a chunk of %i\n", INBUF_SIZE);
-        /* read raw data from the input file */
-        data_size = fread(inbuf, 1, INBUF_SIZE, f);
-        if (!data_size)
-            break;
+    byte_buffer_size = av_image_get_buffer_size(ctx->pix_fmt, ctx->width, ctx->height, 16);
+    byte_buffer = av_malloc(byte_buffer_size);
+    if (!byte_buffer) {
+        av_log(NULL, AV_LOG_ERROR, "Can't allocate buffer\n");
+        return AVERROR(ENOMEM);
+    }
 
-        /* use the parser to split the data into frames */
-        data = inbuf;
-        while (data_size > 0) {
-            ret = av_parser_parse2(parser, codecContext, &pkt->data, &pkt->size,
-                                   data, data_size, AV_NOPTS_VALUE, AV_NOPTS_VALUE, 0);
-            if (ret < 0) {
-                fprintf(stderr, "Error while parsing\n");
-                exit(1);
-            }
-            data      += ret;
-            data_size -= ret;
-            printf("Packet size is now %i\n", pkt->size);
-            if (pkt->size)
-                decode(codecContext, frame, pkt);
+    GLuint QuadProgram = CreateVertFragProgramFromPath(
+        "quad.vert",
+        "quad.frag");
+    glUseProgram(QuadProgram);
+
+    GLuint YTex = CreateTexture(ctx->width, ctx->height, 1);
+    GLuint UTex = CreateTexture(ctx->width*0.5, ctx->height*0.5, 1);
+    GLuint VTex = CreateTexture(ctx->width*0.5, ctx->height*0.5, 1);
+
+    float Verts[8] = {
+        -1, -1, // Left Top
+        -1, 1,  // Left Bottom
+        1, -1,  // Right Top
+        1, 1    // Right Bottom
+    };
+    GLuint Quad = CreateQuad(Verts);
+
+    printf("#tb %d: %d/%d\n", video_stream, fmt_ctx->streams[video_stream]->time_base.num, fmt_ctx->streams[video_stream]->time_base.den);
+    i = 0;
+    av_init_packet(&pkt);
+    do {
+        if (!end_of_stream)
+            if (av_read_frame(fmt_ctx, &pkt) < 0)
+                end_of_stream = 1;
+        if (end_of_stream) {
+            pkt.data = NULL;
+            pkt.size = 0;
         }
-    }
-    printf("File ended.\n");
+        if (pkt.stream_index == video_stream || end_of_stream) {
+            got_frame = 0;
 
-    /* flush the decoder */
-    decode(codecContext, frame, NULL);
+            if (pkt.pts == AV_NOPTS_VALUE)
+                pkt.pts = pkt.dts = i;
 
-    fclose(f);
+            result = avcodec_decode_video2(ctx, fr, &got_frame, &pkt);
+            if (result < 0) {
+                av_log(NULL, AV_LOG_ERROR, "Error decoding frame\n");
+                return result;
+            }
 
-    av_parser_close(parser);
-    avcodec_free_context(&codecContext);
-    av_frame_free(&frame);
-    av_packet_free(&pkt);
+            if (got_frame) {
+                number_of_written_bytes = av_image_copy_to_buffer(byte_buffer, byte_buffer_size,
+                                        (const uint8_t* const *)fr->data, (const int*) fr->linesize,
+                                        ctx->pix_fmt, ctx->width, ctx->height, 1);
+                if (number_of_written_bytes < 0) {
+                    av_log(NULL, AV_LOG_ERROR, "Can't copy image to buffer\n");
+                    return number_of_written_bytes;
+                }
+                printf("%d, %10"PRId64", %10"PRId64", %8"PRId64", %8d, 0x%08lx\n", video_stream,
+                        fr->pts, fr->pkt_dts, fr->pkt_duration,
+                        number_of_written_bytes, av_adler32_update(0, (const uint8_t*)byte_buffer, number_of_written_bytes));
+                printf("%s\n", av_get_pix_fmt_name(ctx->pix_fmt));
 
+                printf("Uploading %i %i %i bytes\n", byte_buffer_size, ctx->width, ctx->height);
+                UpdateTexture(YTex, ctx->width, ctx->height, GL_RED, fr->data[0], fr->linesize[0]); // Y pixels
+                UpdateTexture(UTex, ctx->width*0.5, ctx->height*0.5, GL_RED, fr->data[1], fr->linesize[1]); // U pixels
+                UpdateTexture(VTex, ctx->width*0.5, ctx->height*0.5, GL_RED, fr->data[2], fr->linesize[2]); // V pixels
+
+                glClearColor(0, 0.1, 0.1, 1);
+                glClear(GL_COLOR_BUFFER_BIT);
+
+                glUniform1i(glGetUniformLocation(QuadProgram, "uTexY"), 0);
+                glUniform1i(glGetUniformLocation(QuadProgram, "uTexU"), 1);
+                glUniform1i(glGetUniformLocation(QuadProgram, "uTexV"), 2);
+
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, YTex);
+                glActiveTexture(GL_TEXTURE1);
+                glBindTexture(GL_TEXTURE_2D, UTex);
+                glActiveTexture(GL_TEXTURE2);
+                glBindTexture(GL_TEXTURE_2D, VTex);
+
+                glBindVertexArray(Quad);
+                glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+                SDL_GL_SwapWindow(Window);
+                SDL_Event Event;
+                while (SDL_PollEvent(&Event)) {
+                    if (Event.type == SDL_QUIT) exit(0);
+                }
+            }
+            av_packet_unref(&pkt);
+            av_init_packet(&pkt);
+        }
+        i++;
+    } while (!end_of_stream || got_frame);
+
+    av_packet_unref(&pkt);
+    av_frame_free(&fr);
+    avcodec_close(ctx);
+    avformat_close_input(&fmt_ctx);
+    avcodec_free_context(&ctx);
+    av_freep(&byte_buffer);
     return 0;
 }
 
-#define NUM_QUADS 30
+#define NUM_QUADS 1
 
 int main(int argc, char const *argv[]) {
-    int result = DoFFMPEGStuff();
-    printf("Result: %i\n", result);
-    return 0;
-
+    av_register_all();
 
     SDL_Init(SDL_INIT_VIDEO);
 
@@ -215,50 +207,12 @@ int main(int argc, char const *argv[]) {
     SDL_GL_MakeCurrent(Window, GLContext);
     InitGLEW();
 
-    GLuint QuadProgram = CreateVertFragProgramFromPath(
-        "quad.vert",
-        "quad.frag");
 
-    GLuint Quads[NUM_QUADS];
-    const float BoxSize = 1.0/NUM_QUADS;
-    for (int QuadIndex = 0; QuadIndex < NUM_QUADS; QuadIndex++) {
 
-        const float X0 = BoxSize * (QuadIndex + 0) * 2 - 1;
-        const float X1 = BoxSize * (QuadIndex + 1) * 2 - 1;
-        const float Y0 = 0 - BoxSize;
-        const float Y1 = 0 + BoxSize;
 
-        const float Vertices[8] = {
-            X0, Y0,  // Left Top
-            X0, Y1,  // Left Bottom
-            X1, Y0,  // Right Top
-            X1, Y1   // Right Bottom
-        };
-        Quads[QuadIndex] = CreateQuad(Vertices);
-    }
-
-    glUseProgram(QuadProgram);
-    GLint VarLoc = glGetUniformLocation(QuadProgram, "VAR");
-    GLint TimeLoc = glGetUniformLocation(QuadProgram, "uTime");
-
-    while (1) {
-        SDL_Event Event;
-        while (SDL_PollEvent(&Event)) {
-            if (Event.type == SDL_QUIT) exit(0);
-        }
-
-        glClearColor(0, 0.1, 0.1, 1);
-        glClear(GL_COLOR_BUFFER_BIT);
-
-        glUniform1f(TimeLoc, SDL_GetTicks());
-
-        for (int QuadIndex = 0; QuadIndex < NUM_QUADS; QuadIndex++) {
-            glUniform1f(VarLoc, (float)QuadIndex/(float)NUM_QUADS);
-            glBindVertexArray(Quads[QuadIndex]);
-            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        }
-
-        SDL_GL_SwapWindow(Window);
+    if (video_decode_example("mario.mp4", Window) != 0) {
+    // if (video_decode_example("pinball.mov", Window) != 0) {
+        return 1;
     }
 
     return 0;
