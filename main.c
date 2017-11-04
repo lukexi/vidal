@@ -18,76 +18,76 @@
 #include "libavformat/avformat.h"
 #include "libavutil/imgutils.h"
 
-static int video_decode_example(const char *input_filename, SDL_Window* Window)
+static int VideoDecodeExample(const char *InputFilename, SDL_Window* Window)
 {
-    AVCodec *codec = NULL;
-    AVCodecContext *ctx= NULL;
-    AVCodecParameters *origin_par = NULL;
-    AVFrame *fr = NULL;
-    uint8_t *byte_buffer = NULL;
-    AVPacket pkt;
-    AVFormatContext *fmt_ctx = NULL;
-    int number_of_written_bytes;
-    int video_stream;
-    int got_frame = 0;
-    int byte_buffer_size;
-    int i = 0;
-    int result;
-    int end_of_stream = 0;
+    AVCodec *Codec = NULL;
+    AVCodecContext *CodecContext= NULL;
+    AVCodecParameters *CodecParams = NULL;
+    AVFrame *Frame = NULL;
+    uint8_t *ByteBuffer = NULL;
+    AVPacket Packet;
+    AVFormatContext *FormatContext = NULL;
+    int NumberOfWrittenBytes;
+    int VideoStream;
+    int GotFrame = 0;
+    int ByteBufferSize;
+    int FrameNumber = 0;
+    int Result;
+    int EndOfStream = 0;
 
-    result = avformat_open_input(&fmt_ctx, input_filename, NULL, NULL);
-    if (result < 0) {
+    Result = avformat_open_input(&FormatContext, InputFilename, NULL, NULL);
+    if (Result < 0) {
         av_log(NULL, AV_LOG_ERROR, "Can't open file\n");
-        return result;
+        return Result;
     }
 
-    result = avformat_find_stream_info(fmt_ctx, NULL);
-    if (result < 0) {
+    Result = avformat_find_stream_info(FormatContext, NULL);
+    if (Result < 0) {
         av_log(NULL, AV_LOG_ERROR, "Can't get stream info\n");
-        return result;
+        return Result;
     }
 
-    video_stream = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
-    if (video_stream < 0) {
-      av_log(NULL, AV_LOG_ERROR, "Can't find video stream in input file\n");
-      return -1;
+    VideoStream = av_find_best_stream(FormatContext, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
+    if (VideoStream < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Can't find video stream in input file\n");
+        return -1;
     }
 
-    origin_par = fmt_ctx->streams[video_stream]->codecpar;
+    CodecParams = FormatContext->streams[VideoStream]->codecpar;
 
-    codec = avcodec_find_decoder(origin_par->codec_id);
-    if (!codec) {
+    Codec = avcodec_find_decoder(CodecParams->codec_id);
+    if (!Codec) {
         av_log(NULL, AV_LOG_ERROR, "Can't find decoder\n");
         return -1;
     }
 
-    ctx = avcodec_alloc_context3(codec);
-    if (!ctx) {
+    CodecContext = avcodec_alloc_context3(Codec);
+    if (!CodecContext) {
         av_log(NULL, AV_LOG_ERROR, "Can't allocate decoder context\n");
         return AVERROR(ENOMEM);
     }
 
-    result = avcodec_parameters_to_context(ctx, origin_par);
-    if (result) {
+    Result = avcodec_parameters_to_context(CodecContext, CodecParams);
+    if (Result) {
         av_log(NULL, AV_LOG_ERROR, "Can't copy decoder context\n");
-        return result;
+        return Result;
     }
 
-    result = avcodec_open2(ctx, codec, NULL);
-    if (result < 0) {
-        av_log(ctx, AV_LOG_ERROR, "Can't open decoder\n");
-        return result;
+    Result = avcodec_open2(CodecContext, Codec, NULL);
+    if (Result < 0) {
+        av_log(CodecContext, AV_LOG_ERROR, "Can't open decoder\n");
+        return Result;
     }
 
-    fr = av_frame_alloc();
-    if (!fr) {
+    Frame = av_frame_alloc();
+    if (!Frame) {
         av_log(NULL, AV_LOG_ERROR, "Can't allocate frame\n");
         return AVERROR(ENOMEM);
     }
 
-    byte_buffer_size = av_image_get_buffer_size(ctx->pix_fmt, ctx->width, ctx->height, 16);
-    byte_buffer = av_malloc(byte_buffer_size);
-    if (!byte_buffer) {
+    ByteBufferSize = av_image_get_buffer_size(CodecContext->pix_fmt, CodecContext->width, CodecContext->height, 16);
+    ByteBuffer = av_malloc(ByteBufferSize);
+    if (!ByteBuffer) {
         av_log(NULL, AV_LOG_ERROR, "Can't allocate buffer\n");
         return AVERROR(ENOMEM);
     }
@@ -97,9 +97,9 @@ static int video_decode_example(const char *input_filename, SDL_Window* Window)
         "quad.frag");
     glUseProgram(QuadProgram);
 
-    GLuint YTex = CreateTexture(ctx->width, ctx->height, 1);
-    GLuint UTex = CreateTexture(ctx->width*0.5, ctx->height*0.5, 1);
-    GLuint VTex = CreateTexture(ctx->width*0.5, ctx->height*0.5, 1);
+    GLuint YTex = CreateTexture(CodecContext->width,     CodecContext->height,     1);
+    GLuint UTex = CreateTexture(CodecContext->width*0.5, CodecContext->height*0.5, 1);
+    GLuint VTex = CreateTexture(CodecContext->width*0.5, CodecContext->height*0.5, 1);
 
     float Verts[8] = {
         -1, -1, // Left Top
@@ -109,46 +109,54 @@ static int video_decode_example(const char *input_filename, SDL_Window* Window)
     };
     GLuint Quad = CreateQuad(Verts);
 
-    printf("#tb %d: %d/%d\n", video_stream, fmt_ctx->streams[video_stream]->time_base.num, fmt_ctx->streams[video_stream]->time_base.den);
-    i = 0;
-    av_init_packet(&pkt);
+    printf("#tb %d: %d/%d\n", VideoStream, FormatContext->streams[VideoStream]->time_base.num, FormatContext->streams[VideoStream]->time_base.den);
+    FrameNumber = 0;
+    av_init_packet(&Packet);
     do {
-        if (!end_of_stream)
-            if (av_read_frame(fmt_ctx, &pkt) < 0)
-                end_of_stream = 1;
-        if (end_of_stream) {
-            pkt.data = NULL;
-            pkt.size = 0;
+        if (!EndOfStream) {
+            if (av_read_frame(FormatContext, &Packet) < 0) {
+                EndOfStream = 1;
+            }
         }
-        if (pkt.stream_index == video_stream || end_of_stream) {
-            got_frame = 0;
+        if (EndOfStream) {
+            Packet.data = NULL;
+            Packet.size = 0;
+        }
+        if (Packet.stream_index == VideoStream || EndOfStream) {
+            GotFrame = 0;
 
-            if (pkt.pts == AV_NOPTS_VALUE)
-                pkt.pts = pkt.dts = i;
-
-            result = avcodec_decode_video2(ctx, fr, &got_frame, &pkt);
-            if (result < 0) {
-                av_log(NULL, AV_LOG_ERROR, "Error decoding frame\n");
-                return result;
+            if (Packet.pts == AV_NOPTS_VALUE) {
+                Packet.pts = Packet.dts = FrameNumber;
             }
 
-            if (got_frame) {
-                number_of_written_bytes = av_image_copy_to_buffer(byte_buffer, byte_buffer_size,
-                                        (const uint8_t* const *)fr->data, (const int*) fr->linesize,
-                                        ctx->pix_fmt, ctx->width, ctx->height, 1);
-                if (number_of_written_bytes < 0) {
-                    av_log(NULL, AV_LOG_ERROR, "Can't copy image to buffer\n");
-                    return number_of_written_bytes;
-                }
-                printf("%d, %10"PRId64", %10"PRId64", %8"PRId64", %8d, 0x%08lx\n", video_stream,
-                        fr->pts, fr->pkt_dts, fr->pkt_duration,
-                        number_of_written_bytes, av_adler32_update(0, (const uint8_t*)byte_buffer, number_of_written_bytes));
-                printf("%s\n", av_get_pix_fmt_name(ctx->pix_fmt));
+            Result = avcodec_decode_video2(CodecContext, Frame, &GotFrame, &Packet);
+            if (Result < 0) {
+                av_log(NULL, AV_LOG_ERROR, "Error decoding frame\n");
+                return Result;
+            }
 
-                printf("Uploading %i %i %i bytes\n", byte_buffer_size, ctx->width, ctx->height);
-                UpdateTexture(YTex, ctx->width, ctx->height, GL_RED, fr->data[0], fr->linesize[0]); // Y pixels
-                UpdateTexture(UTex, ctx->width*0.5, ctx->height*0.5, GL_RED, fr->data[1], fr->linesize[1]); // U pixels
-                UpdateTexture(VTex, ctx->width*0.5, ctx->height*0.5, GL_RED, fr->data[2], fr->linesize[2]); // V pixels
+            if (GotFrame) {
+                NumberOfWrittenBytes = av_image_copy_to_buffer(
+                    ByteBuffer, ByteBufferSize,
+                    (const uint8_t* const *)Frame->data,
+                    (const int*)Frame->linesize,
+                    CodecContext->pix_fmt,
+                    CodecContext->width,
+                    CodecContext->height,
+                    1);
+                if (NumberOfWrittenBytes < 0) {
+                    av_log(NULL, AV_LOG_ERROR, "Can't copy image to buffer\n");
+                    return NumberOfWrittenBytes;
+                }
+                printf("%d, %10"PRId64", %10"PRId64", %8"PRId64", %8d, 0x%08lx\n", VideoStream,
+                        Frame->pts, Frame->pkt_dts, Frame->pkt_duration,
+                        NumberOfWrittenBytes, av_adler32_update(0, (const uint8_t*)ByteBuffer, NumberOfWrittenBytes));
+                printf("%s\n", av_get_pix_fmt_name(CodecContext->pix_fmt));
+
+                printf("Uploading %i %i %i bytes\n", ByteBufferSize, CodecContext->width, CodecContext->height);
+                UpdateTexture(YTex, CodecContext->width, CodecContext->height, GL_RED, Frame->data[0], Frame->linesize[0]); // Y pixels
+                UpdateTexture(UTex, CodecContext->width*0.5, CodecContext->height*0.5, GL_RED, Frame->data[1], Frame->linesize[1]); // U pixels
+                UpdateTexture(VTex, CodecContext->width*0.5, CodecContext->height*0.5, GL_RED, Frame->data[2], Frame->linesize[2]); // V pixels
 
                 glClearColor(0, 0.1, 0.1, 1);
                 glClear(GL_COLOR_BUFFER_BIT);
@@ -163,6 +171,7 @@ static int video_decode_example(const char *input_filename, SDL_Window* Window)
                 glBindTexture(GL_TEXTURE_2D, UTex);
                 glActiveTexture(GL_TEXTURE2);
                 glBindTexture(GL_TEXTURE_2D, VTex);
+                printf("i: %i\n", i);
 
                 glBindVertexArray(Quad);
                 glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -172,19 +181,20 @@ static int video_decode_example(const char *input_filename, SDL_Window* Window)
                 while (SDL_PollEvent(&Event)) {
                     if (Event.type == SDL_QUIT) exit(0);
                 }
+                FrameNumber++;
             }
-            av_packet_unref(&pkt);
-            av_init_packet(&pkt);
+            av_packet_unref(&Packet);
+            av_init_packet(&Packet);
         }
-        i++;
-    } while (!end_of_stream || got_frame);
 
-    av_packet_unref(&pkt);
-    av_frame_free(&fr);
-    avcodec_close(ctx);
-    avformat_close_input(&fmt_ctx);
-    avcodec_free_context(&ctx);
-    av_freep(&byte_buffer);
+    } while (!EndOfStream || GotFrame);
+
+    av_packet_unref(&Packet);
+    av_frame_free(&Frame);
+    avcodec_close(CodecContext);
+    avformat_close_input(&FormatContext);
+    avcodec_free_context(&CodecContext);
+    av_freep(&ByteBuffer);
     return 0;
 }
 
@@ -207,11 +217,7 @@ int main(int argc, char const *argv[]) {
     SDL_GL_MakeCurrent(Window, GLContext);
     InitGLEW();
 
-
-
-
-    if (video_decode_example("mario.mp4", Window) != 0) {
-    // if (video_decode_example("pinball.mov", Window) != 0) {
+    if (VideoDecodeExample("pinball.mov", Window) != 0) {
         return 1;
     }
 
