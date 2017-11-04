@@ -66,6 +66,7 @@ static int VideoDecodeExample(const char *InputFilename, SDL_Window* Window)
     int FrameNumber = 0;
     int Result;
     int EndOfStream = 0;
+    int EndOfFile = 0;
 
     Result = avformat_open_input(&FormatContext, InputFilename, NULL, NULL);
     if (Result < 0) {
@@ -156,15 +157,32 @@ static int VideoDecodeExample(const char *InputFilename, SDL_Window* Window)
                 Packet.pts = Packet.dts = FrameNumber;
             }
 
+            /*
             Result = avcodec_decode_video2(CodecContext, Frame, &GotFrame, &Packet);
             if (Result < 0) {
                 av_log(NULL, AV_LOG_ERROR, "Error decoding frame\n");
                 return Result;
             }
+            */
+            Result = avcodec_send_packet(CodecContext, &Packet);
+            if (Result != 0) {
+                av_log(NULL, AV_LOG_ERROR, "Error sending packet\n");
+                return Result;
+            }
+
+            Result = avcodec_receive_frame(CodecContext, Frame);
+            if (Result != 0 && Result != AVERROR_EOF) {
+                av_log(NULL, AV_LOG_ERROR, "Error receiving frame\n");
+                return Result;
+            }
+
+            if (Result == 0) {
+                GotFrame = 1;
+            }
 
             if (GotFrame) {
                 printf("%10"PRId64", %10"PRId64", %8"PRId64"\n",
-                        Frame->pts, Frame->pkt_dts, Frame->pkt_duration);
+                    Frame->pts, Frame->pkt_dts, Frame->pkt_duration);
                 printf("Uploading %s frame of %i x %i\n",
                     av_get_pix_fmt_name(CodecContext->pix_fmt),
                     CodecContext->width, CodecContext->height);
@@ -173,6 +191,8 @@ static int VideoDecodeExample(const char *InputFilename, SDL_Window* Window)
 
                 FrameNumber++;
             }
+
+
             av_packet_unref(&Packet);
             av_init_packet(&Packet);
         }
