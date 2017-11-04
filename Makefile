@@ -1,7 +1,7 @@
-all: vital
+all: vidal
 
 FLAGS=`pkg-config --libs --cflags SDL2 GLEW libavcodec libavformat`
 FLAGS+=-framework OpenGL
 
-vital: main.c shader.c quad.c texture.c
+vidal: main.c shader.c quad.c texture.c
 	clang -o $@.app $^ $(FLAGS) -g
