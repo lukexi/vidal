@@ -7,19 +7,10 @@
 #include "pa_ringbuffer.h"
 #include <portaudio.h>
 
-/**
- * H264 codec test.
- */
-
-#include "libavutil/adler32.h"
-#include "libavcodec/avcodec.h"
-#include "libavformat/avformat.h"
-#include "libavutil/imgutils.h"
-
-#include "libavutil/adler32.h"
-#include "libavcodec/avcodec.h"
-#include "libavformat/avformat.h"
-#include "libavutil/imgutils.h"
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libavutil/imgutils.h>
+#include <libswscale/swscale.h>
 
 #define SAMPLE_RATE 44100
 #define BLOCK_SIZE 128
@@ -415,9 +406,9 @@ void QueueAudioFrame(AVFrame* Frame, AVCodecContext* CodecContext, audio_state* 
     float* Samples = malloc(Length);
     memcpy(Samples, Frame->data[0], Length);
 
-    // FIXME: Check if format is Planar (data[0] and data[1] for stereo)
-    // or interleaved (all in data[0])
-    // FIXME: convert non-floating point audio to floating point here
+    // FIXME: Use:
+    // https://www.ffmpeg.org/ffmpeg-resampler.html
+    // to convert audio to interleaved stereo
 
     static int NextBlockID = 0;
     audio_block AudioBlock = {
@@ -448,8 +439,9 @@ int main(int argc, char const *argv[]) {
     SDL_GL_MakeCurrent(Window, GLContext);
     InitGLEW();
 
-    video* Video = OpenVideo("pinball.mov");
+    // video* Video = OpenVideo("pinball.mov");
     // video* Video = OpenVideo("mario.mp4");
+    video* Video = OpenVideo("Martin_Luther_King_PBS_interview_with_Kenneth_B._Clark_1963.mp4");
 
     GLuint QuadProgram = CreateVertFragProgramFromPath(
         "quad.vert",
