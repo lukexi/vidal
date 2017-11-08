@@ -477,6 +477,7 @@ int main(int argc, char const *argv[]) {
                 Window, QuadProgram, Quad, YTex, UTex, VTex);
             Video->VideoStream.ReadHead = (Video->VideoStream.ReadHead + 1) % QUEUE_FRAMES;
             NextVideoFrame->Presented = true;
+            av_frame_unref(NextVideoFrame->Frame);
         }
 
         queued_frame* NextAudioFrame = &Video->AudioStream.FrameQueue[Video->AudioStream.ReadHead];
@@ -488,6 +489,7 @@ int main(int argc, char const *argv[]) {
 
             Video->AudioStream.ReadHead = (Video->AudioStream.ReadHead + 1) % QUEUE_FRAMES;
             NextAudioFrame->Presented = true;
+            av_frame_unref(NextAudioFrame->Frame);
         }
 
         if (NextAudioFrame->Presented || NextVideoFrame->Presented) {
