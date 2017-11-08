@@ -19,34 +19,47 @@
 #include "libavformat/avformat.h"
 #include "libavutil/imgutils.h"
 
+#define QUEUE_FRAMES 3
 
 typedef struct {
-    AVFrame*           Frame;
+    AVFrame* Frame;
+    double PTS;
+    bool Presented;
+} queued_frame;
+
+typedef struct {
+    int Index;
+    queued_frame FrameQueue[QUEUE_FRAMES];
+    int ReadHead;
+    int WriteHead;
+    AVCodec*           Codec;
+    AVCodecContext*    CodecContext;
+    double Timebase;
+} stream;
+
+typedef struct {
+
     AVPacket           Packet;
     AVFormatContext*   FormatContext;
 
-    int VideoStream;
-    AVCodec*           VideoCodec;
-    AVCodecContext*    VideoCodecContext;
-
-    int AudioStream;
-    AVCodec*           AudioCodec;
-    AVCodecContext*    AudioCodecContext;
+    stream AudioStream;
+    stream VideoStream;
 
     int Width;
     int Height;
-    int FrameNumber;
+
     bool EndOfStream;
 } video;
 
 
-void RenderFrame(video* Video,
+void RenderFrame(AVFrame* Frame,
+    int Width, int Height,
     SDL_Window* Window, GLuint QuadProgram, GLuint Quad,
     GLuint YTex, GLuint UTex, GLuint VTex)
 {
-    UpdateTexture(YTex, Video->Width,     Video->Height,     GL_RED, Video->Frame->data[0], Video->Frame->linesize[0]); // Y pixels
-    UpdateTexture(UTex, Video->Width*0.5, Video->Height*0.5, GL_RED, Video->Frame->data[1], Video->Frame->linesize[1]); // U pixels
-    UpdateTexture(VTex, Video->Width*0.5, Video->Height*0.5, GL_RED, Video->Frame->data[2], Video->Frame->linesize[2]); // V pixels
+    UpdateTexture(YTex, Width,     Height,     GL_RED, Frame->data[0], Frame->linesize[0]); // Y pixels
+    UpdateTexture(UTex, Width*0.5, Height*0.5, GL_RED, Frame->data[1], Frame->linesize[1]); // U pixels
+    UpdateTexture(VTex, Width*0.5, Height*0.5, GL_RED, Frame->data[2], Frame->linesize[2]); // V pixels
 
     glClearColor(0, 0.1, 0.1, 1);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -75,44 +88,56 @@ void RenderFrame(video* Video,
  bool OpenCodec(
     enum AVMediaType MediaType,
     AVFormatContext* FormatContext,
-    int* StreamIndex,
-    AVCodec** Codec,
-    AVCodecContext** CodecContext)
+    stream* Stream)
 {
     int Result = 0;
 
-    *StreamIndex = av_find_best_stream(FormatContext, MediaType, -1, -1, NULL, 0);
-    if (*StreamIndex < 0) {
+    Stream->Index = av_find_best_stream(FormatContext, MediaType, -1, -1, NULL, 0);
+    if (Stream->Index < 0) {
         av_log(NULL, AV_LOG_ERROR, "Can't find stream in input file\n");
         return false;
     }
-    printf("Assigned stream index %i\n", *StreamIndex);
+    printf("Assigned stream index %i\n", Stream->Index);
 
-    AVCodecParameters* CodecParams = FormatContext->streams[*StreamIndex]->codecpar;
-    *Codec = avcodec_find_decoder(CodecParams->codec_id);
-    if (*Codec == NULL) {
+    AVCodecParameters* CodecParams = FormatContext->streams[Stream->Index]->codecpar;
+    Stream->Codec = avcodec_find_decoder(CodecParams->codec_id);
+    if (Stream->Codec == NULL) {
         av_log(NULL, AV_LOG_ERROR, "Can't find decoder\n");
         return false;
     }
 
-    *CodecContext = avcodec_alloc_context3(*Codec);
-    if (*CodecContext == NULL) {
+    Stream->CodecContext = avcodec_alloc_context3(Stream->Codec);
+    if (Stream->CodecContext == NULL) {
         av_log(NULL, AV_LOG_ERROR, "Can't allocate decoder context\n");
         // AVERROR(ENOMEM);
         return false;
     }
 
-    Result = avcodec_parameters_to_context(*CodecContext, CodecParams);
+    Result = avcodec_parameters_to_context(Stream->CodecContext, CodecParams);
     if (Result) {
         av_log(NULL, AV_LOG_ERROR, "Can't copy decoder context\n");
         return false;
     }
 
-    Result = avcodec_open2(*CodecContext, *Codec, NULL);
+    Result = avcodec_open2(Stream->CodecContext, Stream->Codec, NULL);
     if (Result < 0) {
         av_log(NULL, AV_LOG_ERROR, "Can't open decoder\n");
         return false;
     }
+
+    for (int FrameIndex = 0; FrameIndex < QUEUE_FRAMES; FrameIndex++) {
+        Stream->FrameQueue[FrameIndex].Frame = av_frame_alloc();
+        if (!Stream->FrameQueue[FrameIndex].Frame) {
+            av_log(NULL, AV_LOG_ERROR, "Can't allocate frame\n");
+            // return AVERROR(ENOMEM);
+            return false;
+        }
+
+        // Prevent initial blank frames from being presented
+        Stream->FrameQueue[FrameIndex].Presented = true;
+    }
+
+    Stream->Timebase = av_q2d(FormatContext->streams[Stream->Index]->time_base);
 
     return true;
 }
@@ -138,50 +163,30 @@ video* OpenVideo(const char* InputFilename) {
 
     bool FoundAudio = OpenCodec(AVMEDIA_TYPE_AUDIO,
         Video->FormatContext,
-        &Video->AudioStream,
-        &Video->AudioCodec,
-        &Video->AudioCodecContext
+        &Video->AudioStream
         );
 
     bool FoundVideo = OpenCodec(AVMEDIA_TYPE_VIDEO,
         Video->FormatContext,
-        &Video->VideoStream,
-        &Video->VideoCodec,
-        &Video->VideoCodecContext
+        &Video->VideoStream
         );
-    printf("Video stream index: %i\n", Video->VideoStream);
-    printf("Audio stream index: %i\n", Video->AudioStream);
+    printf("Video stream index: %i\n", Video->VideoStream.Index);
+    printf("Audio stream index: %i\n", Video->AudioStream.Index);
 
-
-    Video->Frame = av_frame_alloc();
-    if (!Video->Frame) {
-        av_log(NULL, AV_LOG_ERROR, "Can't allocate frame\n");
-        // return AVERROR(ENOMEM);
-        free(Video);
-        return NULL;
-    }
-
-    Video->Width  = Video->VideoCodecContext->width;
-    Video->Height = Video->VideoCodecContext->height;
+    Video->Width  = Video->VideoStream.CodecContext->width;
+    Video->Height = Video->VideoStream.CodecContext->height;
 
     return Video;
 }
 
-int GetFrame(video* Video) {
+void DecodeNextFrame(video* Video) {
 
     int Result;
-
-    bool GotFrame = false;
-
-    AVRational Timebase =
-        Video->FormatContext->streams[Video->VideoStream]->time_base;
-    printf("Timebase for video stream %d: %d/%d\n",
-        Video->VideoStream, Timebase.num, Timebase.den);
 
     av_init_packet(&Video->Packet);
 
     if (!Video->EndOfStream) {
-        int Result = av_read_frame(Video->FormatContext, &Video->Packet);
+        Result = av_read_frame(Video->FormatContext, &Video->Packet);
         if (Result < 0) {
             Video->EndOfStream = 1;
         }
@@ -194,58 +199,59 @@ int GetFrame(video* Video) {
     }
 
     int StreamIndex = Video->Packet.stream_index;
-    AVCodec*        Codec = NULL;
-    AVCodecContext* CodecContext = NULL;
-    if (StreamIndex == Video->AudioStream) {
-        Codec        = Video->AudioCodec;
-        CodecContext = Video->AudioCodecContext;
-        printf("GOT A AUDIO FRAME %i\n", Video->Packet.stream_index);
-    } else if (StreamIndex == Video->VideoStream) {
-        Codec        = Video->VideoCodec;
-        CodecContext = Video->VideoCodecContext;
-        printf("GOT A VIDEO FRAME\n");
+
+    AVRational Timebase = Video->FormatContext->streams[StreamIndex]->time_base;
+    av_q2d(Timebase);
+
+    stream* Stream        = NULL;
+    if (StreamIndex == Video->AudioStream.Index) {
+        Stream = &Video->AudioStream;
+    } else if (StreamIndex == Video->VideoStream.Index) {
+        Stream = &Video->VideoStream;
     } else {
         printf("Unknown stream index %i\n", StreamIndex);
         av_packet_unref(&Video->Packet);
         av_init_packet(&Video->Packet);
-        return -1;
+        return;
     }
 
+    AVCodec*        Codec        = Stream->Codec;
+    AVCodecContext* CodecContext = Stream->CodecContext;
+    queued_frame*   QFrame       = &Stream->FrameQueue[Stream->WriteHead];
+    Stream->WriteHead            = (Stream->WriteHead + 1) % QUEUE_FRAMES;
+
+    printf("Wrote stream %i into head %i\n", Stream->Index, Stream->WriteHead);
     Result = avcodec_send_packet(CodecContext, &Video->Packet);
     if (Result != 0) {
-
         av_log(NULL, AV_LOG_ERROR, "Error sending packet\n");
-        return Result;
+        return;
     }
 
-    Result = avcodec_receive_frame(CodecContext, Video->Frame);
+    Result = avcodec_receive_frame(CodecContext, QFrame->Frame);
     if (Result != 0 && Result != AVERROR_EOF) {
         av_log(NULL, AV_LOG_ERROR, "Error receiving frame\n");
-        return Result;
+        return;
     }
-
-    if (Result == 0) {
-        GotFrame = true;
-    }
+    QFrame->PTS = QFrame->Frame->pts * Stream->Timebase;
+    QFrame->Presented = false;
 
     av_packet_unref(&Video->Packet);
     av_init_packet(&Video->Packet);
-
-    if (GotFrame) {
-        return StreamIndex;
-    } else {
-        return -1;
-    }
 }
 
 void FreeVideo(video* Video) {
     av_packet_unref(&Video->Packet);
-    av_frame_free(&Video->Frame);
-    avcodec_close(Video->VideoCodecContext);
-    avcodec_close(Video->AudioCodecContext);
+
+    for (int FrameIndex = 0; FrameIndex < QUEUE_FRAMES; FrameIndex++) {
+        av_frame_free(&Video->VideoStream.FrameQueue[FrameIndex].Frame);
+        av_frame_free(&Video->AudioStream.FrameQueue[FrameIndex].Frame);
+    }
+
+    avcodec_close(Video->VideoStream.CodecContext);
+    avcodec_close(Video->AudioStream.CodecContext);
     avformat_close_input(&Video->FormatContext);
-    avcodec_free_context(&Video->VideoCodecContext);
-    avcodec_free_context(&Video->AudioCodecContext);
+    avcodec_free_context(&Video->VideoStream.CodecContext);
+    avcodec_free_context(&Video->AudioStream.CodecContext);
 }
 
 #define NUM_QUADS 1
@@ -269,7 +275,6 @@ int main(int argc, char const *argv[]) {
 
     video* Video = OpenVideo("pinball.mov");
 
-
     GLuint QuadProgram = CreateVertFragProgramFromPath(
         "quad.vert",
         "quad.frag");
@@ -287,18 +292,42 @@ int main(int argc, char const *argv[]) {
     };
     GLuint Quad = CreateQuad(Verts);
 
+    const int StartMS = SDL_GetTicks();
+
+    // Enqueue the first frame
+    DecodeNextFrame(Video);
     while (!Video->EndOfStream) {
-        int StreamIndex = GetFrame(Video);
-        printf("Stream index; %i\n", StreamIndex);
-        if (StreamIndex == Video->VideoStream) {
-            RenderFrame(Video, Window, QuadProgram, Quad, YTex, UTex, VTex);
+        const double Now = (double)(SDL_GetTicks() - StartMS) / 1000.0;
+
+        queued_frame* NextVideoFrame = &Video->VideoStream.FrameQueue[Video->VideoStream.ReadHead];
+        if (!NextVideoFrame->Presented && Now >= NextVideoFrame->PTS) {
+            printf("Reading Video frame %i\n", Video->VideoStream.ReadHead);
+            RenderFrame(NextVideoFrame->Frame,
+                Video->Width, Video->Height,
+                Window, QuadProgram, Quad, YTex, UTex, VTex);
+            Video->VideoStream.ReadHead = (Video->VideoStream.ReadHead + 1) % QUEUE_FRAMES;
+            NextVideoFrame->Presented = true;
+
+        }
+
+        queued_frame* NextAudioFrame = &Video->AudioStream.FrameQueue[Video->AudioStream.ReadHead];
+        if (!NextAudioFrame->Presented && Now >= NextAudioFrame->PTS) {
+            printf("Reading Audio frame %i\n", Video->AudioStream.ReadHead);
+            Video->AudioStream.ReadHead = (Video->AudioStream.ReadHead + 1) % QUEUE_FRAMES;
+            NextAudioFrame->Presented = true;
+        }
+
+        if (NextAudioFrame->Presented || NextVideoFrame->Presented) {
+            DecodeNextFrame(Video);
         }
     }
+
+    FreeVideo(Video);
     // printf("%10"PRId64", %10"PRId64", %8"PRId64"\n",
     //     Video->Frame->pts, Video->Frame->pkt_dts, Video->Frame->pkt_duration);
     // printf("Uploading %s frame of %i x %i\n",
-    //     av_get_pix_fmt_name(Video->CodecContext->pix_fmt),
-    //     Video->CodecContext->width, Video->CodecContext->height);
+    //     av_get_pix_fmt_name(Video->VideoCodecContext->pix_fmt),
+    //     Video->Width, Video->Height);
 
     return 0;
 }
