@@ -101,7 +101,6 @@ void RenderFrame(AVFrame* Frame,
         av_log(NULL, AV_LOG_ERROR, "Can't find stream in input file\n");
         return false;
     }
-    printf("Assigned stream index %i\n", Stream->Index);
 
     AVCodecParameters* CodecParams = FormatContext->streams[Stream->Index]->codecpar;
     Stream->Codec = avcodec_find_decoder(CodecParams->codec_id);
@@ -179,6 +178,12 @@ video* OpenVideo(const char* InputFilename) {
 
     Video->Width  = Video->VideoStream.CodecContext->width;
     Video->Height = Video->VideoStream.CodecContext->height;
+
+    printf("Opened %ix%i video with video format %s audio format %s\n",
+        Video->Width, Video->Height,
+        av_get_pix_fmt_name(Video->VideoStream.CodecContext->pix_fmt),
+        av_get_sample_fmt_name(Video->AudioStream.CodecContext->sample_fmt)
+        );
 
     return Video;
 }
@@ -410,6 +415,10 @@ void QueueAudioFrame(AVFrame* Frame, AVCodecContext* CodecContext, audio_state* 
     float* Samples = malloc(Length);
     memcpy(Samples, Frame->data[0], Length);
 
+    // FIXME: Check if format is Planar (data[0] and data[1] for stereo)
+    // or interleaved (all in data[0])
+    // FIXME: convert non-floating point audio to floating point here
+
     static int NextBlockID = 0;
     audio_block AudioBlock = {
         .BlockID         = NextBlockID++,
@@ -461,7 +470,7 @@ int main(int argc, char const *argv[]) {
 
     const int StartMS = SDL_GetTicks();
 
-    printf("av_get_sample_fmt_name %s\n", av_get_sample_fmt_name(Video->AudioStream.CodecContext->sample_fmt));
+
     // Enqueue the first frame
     DecodeNextFrame(Video);
     while (!Video->EndOfStream) {
@@ -471,7 +480,7 @@ int main(int argc, char const *argv[]) {
 
         queued_frame* NextVideoFrame = &Video->VideoStream.FrameQueue[Video->VideoStream.ReadHead];
         if (!NextVideoFrame->Presented && Now >= NextVideoFrame->PTS) {
-            printf("Reading Video frame %i\n", Video->VideoStream.ReadHead);
+            // printf("Reading Video frame %i\n", Video->VideoStream.ReadHead);
             RenderFrame(NextVideoFrame->Frame,
                 Video->Width, Video->Height,
                 Window, QuadProgram, Quad, YTex, UTex, VTex);
@@ -484,7 +493,7 @@ int main(int argc, char const *argv[]) {
         // printf("A: %f\n", NextAudioFrame->PTS);
         // printf("V: %f\n", NextVideoFrame->PTS);
         if (!NextAudioFrame->Presented && Now >= NextAudioFrame->PTS) {
-            printf("Reading Audio frame %i\n", Video->AudioStream.ReadHead);
+            // printf("Reading Audio frame %i\n", Video->AudioStream.ReadHead);
             QueueAudioFrame(NextAudioFrame->Frame, Video->AudioStream.CodecContext, AudioState);
 
             Video->AudioStream.ReadHead = (Video->AudioStream.ReadHead + 1) % QUEUE_FRAMES;
@@ -498,11 +507,8 @@ int main(int argc, char const *argv[]) {
     }
 
     FreeVideo(Video);
-    // printf("%10"PRId64", %10"PRId64", %8"PRId64"\n",
-    //     Video->Frame->pts, Video->Frame->pkt_dts, Video->Frame->pkt_duration);
-    // printf("Uploading %s frame of %i x %i\n",
-    //     av_get_pix_fmt_name(Video->VideoCodecContext->pix_fmt),
-    //     Video->Width, Video->Height);
+
+
 
     return 0;
 }
