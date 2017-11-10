@@ -2,13 +2,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-static float FullscreenQuadVertices[8] = {
-    -1, -1, // Left Top
-    -1, 1,  // Left Bottom
-    1, -1,  // Right Top
-    1, 1    // Right Bottom
-};
-
 void InitGLEW() {
     // Initialize GLEW
     glewExperimental = GL_TRUE;

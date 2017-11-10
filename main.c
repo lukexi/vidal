@@ -44,31 +44,42 @@ typedef struct {
     int Height;
 
     bool EndOfStream;
+
+    struct SwsContext* ColorConvertContext;
+    size_t ColorConvertBufferSize;
+    uint8_t* ColorConvertBuffer;
+
+    double StartTime;
 } video;
 
 
-void RenderFrame(AVFrame* Frame,
-    int Width, int Height,
+void RenderFrame(video* Video, AVFrame* Frame,
     SDL_Window* Window, GLuint QuadProgram, GLuint Quad,
-    GLuint YTex, GLuint UTex, GLuint VTex)
+    GLuint Tex)
 {
-    UpdateTexture(YTex, Width,     Height,     GL_RED, Frame->data[0], Frame->linesize[0]); // Y pixels
-    UpdateTexture(UTex, Width*0.5, Height*0.5, GL_RED, Frame->data[1], Frame->linesize[1]); // U pixels
-    UpdateTexture(VTex, Width*0.5, Height*0.5, GL_RED, Frame->data[2], Frame->linesize[2]); // V pixels
+    // Use https://www.ffmpeg.org/ffmpeg-scaler.html
+    // to convert from YUV420P to packed RGB24
+    uint8_t* OutputData[1] = { Video->ColorConvertBuffer }; // RGB24 have one plane
+    int OutputLineSize[1] = { 3 * Video->Width }; // RGB stride
+
+    int Result = sws_scale(Video->ColorConvertContext,
+        (const uint8_t *const *)Frame->data,
+        Frame->linesize,
+        0,      // Begin slice
+        Video->Height, // Num slices
+        OutputData,
+        OutputLineSize);
+    (void)Result;
+
+    UpdateTexture(Tex, Video->Width, Video->Height, GL_RGB, Video->ColorConvertBuffer);
 
     glClearColor(0, 0.1, 0.1, 1);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    glUniform1i(glGetUniformLocation(QuadProgram, "uTexY"), 0);
-    glUniform1i(glGetUniformLocation(QuadProgram, "uTexU"), 1);
-    glUniform1i(glGetUniformLocation(QuadProgram, "uTexV"), 2);
+    glUniform1i(glGetUniformLocation(QuadProgram, "uTex"), 0);
 
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, YTex);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, UTex);
-    glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_2D, VTex);
+    glBindTexture(GL_TEXTURE_2D, Tex);
 
     glBindVertexArray(Quad);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -133,50 +144,8 @@ void RenderFrame(AVFrame* Frame,
 
     Stream->Timebase = av_q2d(FormatContext->streams[Stream->Index]->time_base);
 
+
     return true;
-}
-
-video* OpenVideo(const char* InputFilename) {
-    video* Video = calloc(1, sizeof(video));
-
-    int Result;
-
-    Result = avformat_open_input(&Video->FormatContext, InputFilename, NULL, NULL);
-    if (Result < 0) {
-        av_log(NULL, AV_LOG_ERROR, "Can't open file\n");
-        free(Video);
-        return NULL;
-    }
-
-    Result = avformat_find_stream_info(Video->FormatContext, NULL);
-    if (Result < 0) {
-        av_log(NULL, AV_LOG_ERROR, "Can't get stream info\n");
-        free(Video);
-        return NULL;
-    }
-
-    bool FoundAudio = OpenCodec(AVMEDIA_TYPE_AUDIO,
-        Video->FormatContext,
-        &Video->AudioStream
-        );
-
-    bool FoundVideo = OpenCodec(AVMEDIA_TYPE_VIDEO,
-        Video->FormatContext,
-        &Video->VideoStream
-        );
-    printf("Video stream index: %i\n", Video->VideoStream.Index);
-    printf("Audio stream index: %i\n", Video->AudioStream.Index);
-
-    Video->Width  = Video->VideoStream.CodecContext->width;
-    Video->Height = Video->VideoStream.CodecContext->height;
-
-    printf("Opened %ix%i video with video format %s audio format %s\n",
-        Video->Width, Video->Height,
-        av_get_pix_fmt_name(Video->VideoStream.CodecContext->pix_fmt),
-        av_get_sample_fmt_name(Video->AudioStream.CodecContext->sample_fmt)
-        );
-
-    return Video;
 }
 
 void DecodeNextFrame(video* Video) {
@@ -211,11 +180,7 @@ void DecodeNextFrame(video* Video) {
         return;
     }
 
-    int WriteHead = Stream->WriteHead;
-    AVCodec*        Codec        = Stream->Codec;
     AVCodecContext* CodecContext = Stream->CodecContext;
-    queued_frame*   QFrame       = &Stream->FrameQueue[WriteHead];
-    Stream->WriteHead            = (WriteHead + 1) % QUEUE_FRAMES;
 
     Result = avcodec_send_packet(CodecContext, &Video->Packet);
     if (Result != 0) {
@@ -223,17 +188,88 @@ void DecodeNextFrame(video* Video) {
         return;
     }
 
+    int WriteHead = Stream->WriteHead;
+    queued_frame*   QFrame       = &Stream->FrameQueue[WriteHead];
+
     Result = avcodec_receive_frame(CodecContext, QFrame->Frame);
-    if (Result != 0 && Result != AVERROR_EOF) {
+    if (Result != 0 && Result != AVERROR_EOF && Result != AVERROR(EAGAIN)) {
         av_log(NULL, AV_LOG_ERROR, "Error receiving frame\n");
         return;
     }
-    QFrame->PTS = QFrame->Frame->pts * Stream->Timebase;
-    QFrame->Presented = false;
+
+    if (Result == 0) {
+        Stream->WriteHead = (WriteHead + 1) % QUEUE_FRAMES;
+        QFrame->PTS = QFrame->Frame->pts * Stream->Timebase;
+        QFrame->Presented = false;
+    }
 
     av_packet_unref(&Video->Packet);
     av_init_packet(&Video->Packet);
+
+    if (Result == AVERROR(EAGAIN)) {
+        printf("Buffering...\n");
+        DecodeNextFrame(Video);
+    }
 }
+
+
+video* OpenVideo(const char* InputFilename) {
+    video* Video = calloc(1, sizeof(video));
+
+    int Result;
+
+    Result = avformat_open_input(&Video->FormatContext, InputFilename, NULL, NULL);
+    if (Result < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Can't open file\n");
+        free(Video);
+        return NULL;
+    }
+
+    Result = avformat_find_stream_info(Video->FormatContext, NULL);
+    if (Result < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Can't get stream info\n");
+        free(Video);
+        return NULL;
+    }
+
+    bool FoundAudio = OpenCodec(AVMEDIA_TYPE_AUDIO,
+        Video->FormatContext,
+        &Video->AudioStream
+        );
+
+    bool FoundVideo = OpenCodec(AVMEDIA_TYPE_VIDEO,
+        Video->FormatContext,
+        &Video->VideoStream
+        );
+    (void)FoundAudio;
+    (void)FoundVideo;
+    printf("Video stream index: %i\n", Video->VideoStream.Index);
+    printf("Audio stream index: %i\n", Video->AudioStream.Index);
+
+    Video->Width  = Video->VideoStream.CodecContext->width;
+    Video->Height = Video->VideoStream.CodecContext->height;
+
+    Video->ColorConvertContext = sws_getContext(
+            Video->Width, Video->Height, Video->VideoStream.CodecContext->pix_fmt,
+            Video->Width, Video->Height, AV_PIX_FMT_RGB24,
+            0, NULL, NULL, NULL);
+    Video->ColorConvertBufferSize = 3*Video->Width*Video->Height;
+    Video->ColorConvertBuffer = malloc(Video->ColorConvertBufferSize);
+
+    Video->StartTime = ((double)SDL_GetTicks()/1000.0);
+
+    // Load the first frame into the Video structure
+    DecodeNextFrame(Video);
+
+    printf("Opened %ix%i video with video format %s audio format %s\n",
+        Video->Width, Video->Height,
+        av_get_pix_fmt_name(Video->VideoStream.CodecContext->pix_fmt),
+        av_get_sample_fmt_name(Video->AudioStream.CodecContext->sample_fmt)
+        );
+
+    return Video;
+}
+
 
 void FreeVideo(video* Video) {
     av_packet_unref(&Video->Packet);
@@ -248,6 +284,11 @@ void FreeVideo(video* Video) {
     avformat_close_input(&Video->FormatContext);
     avcodec_free_context(&Video->VideoStream.CodecContext);
     avcodec_free_context(&Video->AudioStream.CodecContext);
+
+    sws_freeContext(Video->ColorConvertContext);
+
+    free(Video->ColorConvertBuffer);
+    free(Video);
 }
 
 #define AUDIO_QUEUE 16 // must be power of 2
@@ -420,6 +461,26 @@ void QueueAudioFrame(AVFrame* Frame, AVCodecContext* CodecContext, audio_state* 
     PaUtil_WriteRingBuffer(&AudioState->BlocksRingBuf, &AudioBlock, 1);
 }
 
+void SeekVideo(video* Video, double Timestamp) {
+    int64_t VideoPTS = Timestamp / Video->VideoStream.Timebase;
+    av_seek_frame(Video->FormatContext, Video->VideoStream.Index,
+        VideoPTS, AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_ANY);
+
+    int64_t AudioPTS = Timestamp / Video->AudioStream.Timebase;
+    av_seek_frame(Video->FormatContext, Video->AudioStream.Index,
+        AudioPTS, AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_ANY);
+
+    Video->StartTime = ((double)SDL_GetTicks()/1000.0) - Timestamp;
+
+    avcodec_flush_buffers(Video->VideoStream.CodecContext);
+    avcodec_flush_buffers(Video->AudioStream.CodecContext);
+    Video->VideoStream.ReadHead = 0;
+    Video->VideoStream.WriteHead = 0;
+    Video->AudioStream.ReadHead = 0;
+    Video->AudioStream.WriteHead = 0;
+    DecodeNextFrame(Video);
+}
+
 int main(int argc, char const *argv[]) {
     av_register_all();
 
@@ -441,16 +502,15 @@ int main(int argc, char const *argv[]) {
 
     // video* Video = OpenVideo("pinball.mov");
     // video* Video = OpenVideo("mario.mp4");
-    video* Video = OpenVideo("Martin_Luther_King_PBS_interview_with_Kenneth_B._Clark_1963.mp4");
+    // video* Video = OpenVideo("Martin_Luther_King_PBS_interview_with_Kenneth_B._Clark_1963.mp4");
+    video* Video = OpenVideo("MartinLutherKing.mp4");
 
     GLuint QuadProgram = CreateVertFragProgramFromPath(
         "quad.vert",
         "quad.frag");
     glUseProgram(QuadProgram);
 
-    GLuint YTex = CreateTexture(Video->Width,     Video->Height,     1);
-    GLuint UTex = CreateTexture(Video->Width*0.5, Video->Height*0.5, 1);
-    GLuint VTex = CreateTexture(Video->Width*0.5, Video->Height*0.5, 1);
+    GLuint Tex = CreateTexture(Video->Width, Video->Height, 3);
 
     float Verts[8] = {
         -1, -1, // Left Top
@@ -460,32 +520,25 @@ int main(int argc, char const *argv[]) {
     };
     GLuint Quad = CreateQuad(Verts);
 
-    const int StartMS = SDL_GetTicks();
-
-
-    // Enqueue the first frame
-    DecodeNextFrame(Video);
-    while (!Video->EndOfStream) {
-        const double Now = (double)(SDL_GetTicks() - StartMS) / 1000.0;
+    while (1) {
+        const double Now = ((double)SDL_GetTicks() / 1000.0) - Video->StartTime;
 
         // FIXME: Pull along the audio/video ReadHeads until the PTS is roughly in sync
 
         queued_frame* NextVideoFrame = &Video->VideoStream.FrameQueue[Video->VideoStream.ReadHead];
         if (!NextVideoFrame->Presented && Now >= NextVideoFrame->PTS) {
-            // printf("Reading Video frame %i\n", Video->VideoStream.ReadHead);
-            RenderFrame(NextVideoFrame->Frame,
-                Video->Width, Video->Height,
-                Window, QuadProgram, Quad, YTex, UTex, VTex);
+
+            RenderFrame(Video, NextVideoFrame->Frame,
+                Window, QuadProgram, Quad, Tex);
+
             Video->VideoStream.ReadHead = (Video->VideoStream.ReadHead + 1) % QUEUE_FRAMES;
             NextVideoFrame->Presented = true;
             av_frame_unref(NextVideoFrame->Frame);
         }
 
         queued_frame* NextAudioFrame = &Video->AudioStream.FrameQueue[Video->AudioStream.ReadHead];
-        // printf("A: %f\n", NextAudioFrame->PTS);
-        // printf("V: %f\n", NextVideoFrame->PTS);
         if (!NextAudioFrame->Presented && Now >= NextAudioFrame->PTS) {
-            // printf("Reading Audio frame %i\n", Video->AudioStream.ReadHead);
+
             QueueAudioFrame(NextAudioFrame->Frame, Video->AudioStream.CodecContext, AudioState);
 
             Video->AudioStream.ReadHead = (Video->AudioStream.ReadHead + 1) % QUEUE_FRAMES;
@@ -495,6 +548,11 @@ int main(int argc, char const *argv[]) {
 
         if (NextAudioFrame->Presented || NextVideoFrame->Presented) {
             DecodeNextFrame(Video);
+        }
+
+        if (Video->EndOfStream) {
+            Video->EndOfStream = 0;
+            SeekVideo(Video, 0);
         }
     }
 

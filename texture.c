@@ -34,37 +34,37 @@ int CreateTexture(int width, int height, int channels) {
 
     // glTextureParameterf(Tex, GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 16);
 
-    // glPixelStorei(GL_UNPACK_LSB_FIRST, 0);
-    // glPixelStorei(GL_UNPACK_SWAP_BYTES, 0);
-    // glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-    // glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, 0);
-    // glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
-    // glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
-    // glPixelStorei(GL_UNPACK_SKIP_IMAGES, 0);
-    // glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glPixelStorei(GL_UNPACK_LSB_FIRST, 0);
+    glPixelStorei(GL_UNPACK_SWAP_BYTES, 0);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, 0);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+    glPixelStorei(GL_UNPACK_SKIP_IMAGES, 0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
     glTexStorage2D(
         GL_TEXTURE_2D,
         1,
-        GL_R8,
+        GL_RGB8,
         width,
         height);
 
 
-    // const int* SwizzleMask = channels == 1 ? GrayscaleSwizzleMask : RGBASwizzleMask;
-    // glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, SwizzleMask);
+    const int* SwizzleMask = channels == 1 ? GrayscaleSwizzleMask : RGBASwizzleMask;
+    glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, SwizzleMask);
 
     return Tex;
 }
 
-void UpdateTexture(GLuint Tex, int Width, int Height, GLenum Format, const void* Data, int Stride) {
+void UpdateTexture(GLuint Tex, int Width, int Height, GLenum Format, const void* Data) {
     const GLenum ImageType = GL_UNSIGNED_BYTE;
 
     glBindTexture(GL_TEXTURE_2D, Tex);
     // Use RGB(a) or copy single-channel images to all channels for grayscale
-    // const int* SwizzleMask = Format == GL_RED ? GrayscaleSwizzleMask : RGBASwizzleMask;
-    // glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, SwizzleMask);
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, Stride);
+    const int* SwizzleMask = Format == GL_RED ? GrayscaleSwizzleMask : RGBASwizzleMask;
+    glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, SwizzleMask);
+    // glPixelStorei(GL_UNPACK_ROW_LENGTH, Stride);
 
     glTexSubImage2D(GL_TEXTURE_2D,
         0,
