@@ -203,7 +203,7 @@ void DecodeNextFrame(video* Video) {
 void UploadVideoFrame(video* Video, AVFrame* Frame) {
     // Use https://www.ffmpeg.org/ffmpeg-scaler.html
     // to convert from YUV420P to packed RGB24
-    uint8_t * OutputData[1] = { Video->ColorConvertBuffer }; // RGB24 have one plane
+    uint8_t* OutputData[1] = { Video->ColorConvertBuffer }; // RGB24 have one plane
     int OutputLineSize[1] = { 3 * Video->Width }; // RGB stride
 
     int Result = sws_scale(Video->ColorConvertContext,
