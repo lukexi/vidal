@@ -69,7 +69,7 @@ bool OpenCodec(
     return true;
 }
 
-video* OpenVideo(const char* InputFilename, NVGcontext* NVG) {
+video* OpenVideo(const char* InputFilename, NVGcontext* NVG, audio_state* AudioState) {
     video* Video = calloc(1, sizeof(video));
 
     int Result;
@@ -130,6 +130,8 @@ video* OpenVideo(const char* InputFilename, NVGcontext* NVG) {
         av_get_pix_fmt_name(Video->VideoStream.CodecContext->pix_fmt),
         av_get_sample_fmt_name(Video->AudioStream.CodecContext->sample_fmt)
         );
+
+    Video->AudioChannel = GetNextChannel(AudioState);
 
     return Video;
 }
@@ -218,7 +220,8 @@ void UploadVideoFrame(video* Video, AVFrame* Frame) {
     UpdateTexture(Video->Texture, Video->Width, Video->Height, GL_RGB, Video->ColorConvertBuffer);
 }
 
-void QueueAudioFrame(AVFrame* Frame, AVCodecContext* CodecContext, audio_state* AudioState) {
+void QueueAudioFrame(AVFrame* Frame, video* Video, audio_state* AudioState) {
+    AVCodecContext* CodecContext = Video->AudioStream.CodecContext;
     int Length = av_samples_get_buffer_size(NULL,
         CodecContext->channels, Frame->nb_samples, CodecContext->sample_fmt, 0);
 
@@ -229,49 +232,102 @@ void QueueAudioFrame(AVFrame* Frame, AVCodecContext* CodecContext, audio_state* 
     // https://www.ffmpeg.org/ffmpeg-resampler.html
     // to convert audio to interleaved stereo
 
-    static int NextBlockID = 0;
     audio_block AudioBlock = {
-        .BlockID         = NextBlockID++,
         .Samples         = Samples,
         .Length          = Frame->nb_samples,
         .NextSampleIndex = 0
     };
-    PaUtil_WriteRingBuffer(&AudioState->BlocksRingBuf, &AudioBlock, 1);
+
+    PaUtil_WriteRingBuffer(&AudioState->Channels[Video->AudioChannel].BlocksRingBuf, &AudioBlock, 1);
 }
 
-void TickVideo(video* Video, audio_state* AudioState) {
+void MarkFramePresented(queued_frame* QFrame) {
+    QFrame->Presented = true;
+    av_frame_unref(QFrame->Frame);
+}
+
+bool FrameIsReady(queued_frame* Frame, double Now) {
+    return !Frame->Presented && Now >= Frame->PTS;
+}
+
+// Checks if the decoder has outpaced us, and drops up to
+// MAX_FRAME_DROP frames if so.
+queued_frame* GetNextFrame(stream* Stream, double Now) {
+
+    const int MAX_FRAME_DROP = QUEUE_FRAMES; // make this equal to QUEUE_FRAMES?
+    for (int Readahead = 0; Readahead < MAX_FRAME_DROP; Readahead++) {
+        int CurrHead = (Stream->ReadHead + Readahead)     % QUEUE_FRAMES;
+        int NextHead = (Stream->ReadHead + Readahead + 1) % QUEUE_FRAMES;
+        queued_frame* CurrFrame = &Stream->FrameQueue[CurrHead];
+        queued_frame* NextFrame = &Stream->FrameQueue[NextHead];
+
+        // If the current frame and the next frame are ready,
+        // drop the current frame.
+        if (FrameIsReady(CurrFrame, Now) && FrameIsReady(NextFrame, Now)) {
+            // printf("DROPPING A FRAME\n");
+            MarkFramePresented(CurrFrame);
+        }
+        // If the current frame is ready and the next frame is not,
+        // return the current frame.
+        else if (FrameIsReady(CurrFrame, Now)) {
+            Stream->ReadHead = NextHead;
+            return CurrFrame;
+        }
+    }
+    return NULL;
+}
+
+bool TickVideo(video* Video, audio_state* AudioState) {
 
     const double Now = GetTimeInSeconds() - Video->StartTime;
 
     // FIXME: Pull along the audio/video ReadHeads until the PTS is roughly in sync
-
-    queued_frame* NextVideoFrame = &Video->VideoStream.FrameQueue[Video->VideoStream.ReadHead];
-    if (!NextVideoFrame->Presented && Now >= NextVideoFrame->PTS) {
-
-        UploadVideoFrame(Video, NextVideoFrame->Frame);
-
-        Video->VideoStream.ReadHead = (Video->VideoStream.ReadHead + 1) % QUEUE_FRAMES;
-        NextVideoFrame->Presented = true;
-        av_frame_unref(NextVideoFrame->Frame);
+    queued_frame* VideoFrame = GetNextFrame(&Video->VideoStream, Now);
+    if (VideoFrame) {
+        UploadVideoFrame(Video, VideoFrame->Frame);
+        MarkFramePresented(VideoFrame);
     }
 
-    queued_frame* NextAudioFrame = &Video->AudioStream.FrameQueue[Video->AudioStream.ReadHead];
-    if (!NextAudioFrame->Presented && Now >= NextAudioFrame->PTS) {
-
-        QueueAudioFrame(NextAudioFrame->Frame, Video->AudioStream.CodecContext, AudioState);
-
-        Video->AudioStream.ReadHead = (Video->AudioStream.ReadHead + 1) % QUEUE_FRAMES;
-        NextAudioFrame->Presented = true;
-        av_frame_unref(NextAudioFrame->Frame);
+    queued_frame* AudioFrame = GetNextFrame(&Video->AudioStream, Now);
+    if (AudioFrame) {
+        QueueAudioFrame(AudioFrame->Frame, Video, AudioState);
+        MarkFramePresented(AudioFrame);
     }
 
-    if (NextAudioFrame->Presented || NextVideoFrame->Presented) {
+    if (VideoFrame) {
+        // If Now has gotten significantly ahead of the video,
+        // buffer up some frames
+        double Ahead = (Now - VideoFrame->PTS);
+        if (Ahead > 3.0/60.0) {
+            // printf("BUFFERING\n");
+            // printf("NOW: %f\n", Now);
+            // printf("PTS: %f\n", VideoFrame->PTS);
+            // printf("AHEAD BY %f\n", Ahead);
+            for (int i = 0; i < 10; i++) {
+                DecodeNextFrame(Video);
+            }
+        }
+    }
+    if (AudioFrame || VideoFrame) {
         DecodeNextFrame(Video);
     }
 
     if (Video->EndOfStream) {
         Video->EndOfStream = 0;
         SeekVideo(Video, 0);
+    }
+
+
+
+    return AudioFrame || VideoFrame;
+}
+
+void FlushStream(stream* Stream) {
+    avcodec_flush_buffers(Stream->CodecContext);
+    Stream->ReadHead  = 0;
+    Stream->WriteHead = 0;
+    for (int FrameIndex = 0; FrameIndex < QUEUE_FRAMES; FrameIndex++) {
+        MarkFramePresented(&Stream->FrameQueue[FrameIndex]);
     }
 }
 
@@ -286,12 +342,9 @@ void SeekVideo(video* Video, double Timestamp) {
 
     Video->StartTime = GetTimeInSeconds() - Timestamp;
 
-    avcodec_flush_buffers(Video->VideoStream.CodecContext);
-    avcodec_flush_buffers(Video->AudioStream.CodecContext);
-    Video->VideoStream.ReadHead = 0;
-    Video->VideoStream.WriteHead = 0;
-    Video->AudioStream.ReadHead = 0;
-    Video->AudioStream.WriteHead = 0;
+    FlushStream(&Video->VideoStream);
+    FlushStream(&Video->AudioStream);
+
     DecodeNextFrame(Video);
 }
 

@@ -38,57 +38,73 @@ int AudioThreadCallback(
     void *UserData) {
 
     audio_state *S = (audio_state*)UserData;
-    ring_buffer_size_t NumNewBlocks =
-        PaUtil_GetRingBufferReadAvailable(
-            &S->BlocksRingBuf);
-    for (int Index = 0; Index < NumNewBlocks; Index++) {
-        audio_block* NewBlock = &S->Blocks[S->WriteBlockIndex];
-        PaUtil_ReadRingBuffer(
-            &S->BlocksRingBuf,
-            NewBlock,
-            1);
-        S->WriteBlockIndex = (S->WriteBlockIndex + 1) % AUDIO_QUEUE;
-    }
 
-    audio_block* Block = &S->Blocks[S->ReadBlockIndex];
-    // printf("CALLBACK BEGAN: BlockID: %i %i %i\n", Block->BlockID, Block->Length, S->ReadBlockIndex);
-
+    // Write silence
     float *Out = (float*)OutputBuffer;
     for (int SampleIndex = 0; SampleIndex < SamplesPerBlock; SampleIndex++) {
-
-        float Amp = 0;
-
-        // Find a valid block to read from
-        bool OKToRead = false;
-        for (int Tries = 0; Tries < AUDIO_QUEUE; Tries++) {
-            if (Block->NextSampleIndex < Block->Length) {
-                OKToRead = true;
-                break;
-            }
-            else {
-                // FIXME: should do this on the main thread
-                free(Block->Samples);
-                Block->Samples = NULL;
-
-                S->ReadBlockIndex = (S->ReadBlockIndex + 1) % AUDIO_QUEUE;
-                Block = &S->Blocks[S->ReadBlockIndex];
-            }
-        }
-
-        if (OKToRead) {
-            // printf("BlockID: %i S: %i\n", Block->BlockID, Block->NextSampleIndex);
-            Amp = Block->Samples[Block->NextSampleIndex];
-            Block->NextSampleIndex++;
-        }
-
-        *Out++ = Amp;
-        *Out++ = Amp;
+        *Out++ = 0;
+        *Out++ = 0;
     }
+
+
+    for (int ChannelIndex = 0; ChannelIndex < NUM_CHANNELS; ChannelIndex++) {
+        audio_channel* Ch = &S->Channels[ChannelIndex];
+
+        ring_buffer_size_t NumNewBlocks =
+            PaUtil_GetRingBufferReadAvailable(
+                &Ch->BlocksRingBuf);
+        for (int Index = 0; Index < NumNewBlocks; Index++) {
+            audio_block* NewBlock = &Ch->Blocks[Ch->WriteBlockIndex];
+            PaUtil_ReadRingBuffer(
+                &Ch->BlocksRingBuf,
+                NewBlock,
+                1);
+            Ch->WriteBlockIndex = (Ch->WriteBlockIndex + 1) % AUDIO_QUEUE;
+        }
+
+        audio_block* Block = &Ch->Blocks[Ch->ReadBlockIndex];
+
+        float *Out = (float*)OutputBuffer;
+        for (int SampleIndex = 0; SampleIndex < SamplesPerBlock; SampleIndex++) {
+
+            float Amp = 0;
+
+            // Find a valid block to read from
+            bool OKToRead = false;
+            for (int Tries = 0; Tries < AUDIO_QUEUE; Tries++) {
+                if (Block->NextSampleIndex < Block->Length) {
+                    OKToRead = true;
+                    break;
+                }
+                else {
+                    // FIXME: should do this on the main thread
+                    free(Block->Samples);
+                    Block->Samples = NULL;
+
+                    Ch->ReadBlockIndex = (Ch->ReadBlockIndex + 1) % AUDIO_QUEUE;
+                    Block = &Ch->Blocks[Ch->ReadBlockIndex];
+                }
+            }
+
+            if (OKToRead) {
+                Amp = Block->Samples[Block->NextSampleIndex];
+                Block->NextSampleIndex++;
+            }
+
+            *Out++ += Amp;
+            *Out++ += Amp;
+        }
+    }
+
 
     return 0;
 }
 
-
+int GetNextChannel(audio_state* AudioState) {
+    int Next = AudioState->NextChannel;
+    AudioState->NextChannel = (AudioState->NextChannel + 1) % NUM_CHANNELS;
+    return Next;
+}
 
 audio_state* StartAudio() {
     PaError Err;
@@ -99,7 +115,10 @@ audio_state* StartAudio() {
 
     const int RingBufSize = AUDIO_QUEUE; // Size must be power of 2
 
-    CreateRingBuffer(sizeof(audio_block), RingBufSize, AudioState->BlocksRingBufStorage, &AudioState->BlocksRingBuf);
+    for (int ChannelIndex = 0; ChannelIndex < NUM_CHANNELS; ChannelIndex++) {
+        audio_channel* Ch = &AudioState->Channels[ChannelIndex];
+        CreateRingBuffer(sizeof(audio_block), RingBufSize, Ch->BlocksRingBufStorage, &Ch->BlocksRingBuf);
+    }
 
     if (Pa_GetDeviceCount() == 0) { return NULL; }
 

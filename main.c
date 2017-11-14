@@ -40,32 +40,44 @@ int main(int argc, char const *argv[])
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
 
+
     SDL_Window* Window = SDL_CreateWindow("Veil", 10,10, 1024,1024, SDL_WINDOW_OPENGL);
     SDL_GLContext GLContext = SDL_GL_CreateContext(Window);
     SDL_GL_MakeCurrent(Window, GLContext);
+    SDL_GL_SetSwapInterval(0);
     InitGLEW();
 
     NVGcontext* NVG = nvgCreateGL3(0);
 
     // video* Video = OpenVideo("pinball.mov");
     // video* Video = OpenVideo("mario.mp4");
-    // video* Video = OpenVideo("Martin_Luther_King_PBS_interview_with_Kenneth_B._Clark_1963.mp4");
-    video* Video = OpenVideo("MartinLutherKing.mp4", NVG);
+    video* Video1 = OpenVideo("Martin_Luther_King_PBS_interview_with_Kenneth_B._Clark_1963.mp4", NVG, AudioState);
+    video* Video2 = OpenVideo("MartinLutherKing.mp4", NVG, AudioState);
 
     GLuint QuadProgram = CreateVertFragProgramFromPath(
         "quad.vert",
         "quad.frag");
     glUseProgram(QuadProgram);
 
-    float Verts[8] = {
+    float Verts1[8] = {
         -1, -1, // Left Top
-        -1, 1,  // Left Bottom
-        1, -1,  // Right Top
+        -1, 0,  // Left Bottom
+        0, -1,  // Right Top
+        0, 0    // Right Bottom
+    };
+    GLuint Quad1 = CreateQuad(Verts1);
+    float Verts2[8] = {
+        0, 0, // Left Top
+        0, 1,  // Left Bottom
+        1, 0,  // Right Top
         1, 1    // Right Bottom
     };
-    GLuint Quad = CreateQuad(Verts);
+    GLuint Quad2 = CreateQuad(Verts2);
 
     while (1) {
+        TickVideo(Video1, AudioState);
+        TickVideo(Video2, AudioState);
+
         SDL_Event Event;
         while (SDL_PollEvent(&Event)) {
             if (Event.type == SDL_QUIT) exit(0);
@@ -74,15 +86,14 @@ int main(int argc, char const *argv[])
         glClearColor(0, 0.1, 0.1, 1);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        TickVideo(Video, AudioState);
-        DrawVideo(Video, Quad, QuadProgram);
+        DrawVideo(Video1, QuadProgram, Quad1);
+        DrawVideo(Video2, QuadProgram, Quad2);
 
         SDL_GL_SwapWindow(Window);
     }
 
-    FreeVideo(Video, NVG);
-
-
+    FreeVideo(Video1, NVG);
+    FreeVideo(Video2, NVG);
 
     return 0;
 }

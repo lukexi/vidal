@@ -9,11 +9,12 @@
 
 #define AUDIO_QUEUE 16 // must be power of 2
 
+#define NUM_CHANNELS 16
+
 typedef struct {
     float* Samples;
     int Length;
     int NextSampleIndex;
-    int BlockID;
 } audio_block;
 
 typedef struct {
@@ -22,9 +23,16 @@ typedef struct {
     int ReadBlockIndex;
     int WriteBlockIndex;
     audio_block Blocks[AUDIO_QUEUE];
+} audio_channel;
+
+typedef struct {
+    audio_channel Channels[NUM_CHANNELS];
+    int NextChannel;
     PaStream* Stream;
 } audio_state;
 
 audio_state* StartAudio();
+
+int GetNextChannel(audio_state* AudioState);
 
 #endif // VIDEO_AUDIO_H

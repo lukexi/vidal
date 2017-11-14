@@ -50,11 +50,12 @@ typedef struct {
     int      NVGImage;
 
     double StartTime;
+    int AudioChannel;
 } video;
 
-video* OpenVideo(const char* InputFilename, NVGcontext* NVG);
+video* OpenVideo(const char* InputFilename, NVGcontext* NVG, audio_state* AudioState);
 
-void TickVideo(video* Video, audio_state* AudioState);
+bool TickVideo(video* Video, audio_state* AudioState);
 void SeekVideo(video* Video, double Timestamp);
 void FreeVideo(video* Video, NVGcontext* NVG);
 
