@@ -20,6 +20,7 @@ typedef struct {
 } queued_frame;
 
 typedef struct {
+    bool Valid;
     int Index;
     queued_frame FrameQueue[QUEUE_FRAMES];
     int ReadHead;

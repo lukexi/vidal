@@ -12,7 +12,7 @@ double GetTimeInSeconds() {
 }
 
 
-bool OpenCodec(
+void OpenCodec(
     enum AVMediaType MediaType,
     AVFormatContext* FormatContext,
     stream* Stream)
@@ -22,33 +22,33 @@ bool OpenCodec(
     Stream->Index = av_find_best_stream(FormatContext, MediaType, -1, -1, NULL, 0);
     if (Stream->Index < 0) {
         av_log(NULL, AV_LOG_ERROR, "Can't find stream in input file\n");
-        return false;
+        return;
     }
 
     AVCodecParameters* CodecParams = FormatContext->streams[Stream->Index]->codecpar;
     Stream->Codec = avcodec_find_decoder(CodecParams->codec_id);
     if (Stream->Codec == NULL) {
         av_log(NULL, AV_LOG_ERROR, "Can't find decoder\n");
-        return false;
+        return;
     }
 
     Stream->CodecContext = avcodec_alloc_context3(Stream->Codec);
     if (Stream->CodecContext == NULL) {
         av_log(NULL, AV_LOG_ERROR, "Can't allocate decoder context\n");
         // AVERROR(ENOMEM);
-        return false;
+        return;
     }
 
     Result = avcodec_parameters_to_context(Stream->CodecContext, CodecParams);
     if (Result) {
         av_log(NULL, AV_LOG_ERROR, "Can't copy decoder context\n");
-        return false;
+        return;
     }
 
     Result = avcodec_open2(Stream->CodecContext, Stream->Codec, NULL);
     if (Result < 0) {
         av_log(NULL, AV_LOG_ERROR, "Can't open decoder\n");
-        return false;
+        return;
     }
 
     for (int FrameIndex = 0; FrameIndex < QUEUE_FRAMES; FrameIndex++) {
@@ -56,7 +56,7 @@ bool OpenCodec(
         if (!Stream->FrameQueue[FrameIndex].Frame) {
             av_log(NULL, AV_LOG_ERROR, "Can't allocate frame\n");
             // return AVERROR(ENOMEM);
-            return false;
+            return;
         }
 
         // Prevent initial blank frames from being presented
@@ -65,8 +65,7 @@ bool OpenCodec(
 
     Stream->Timebase = av_q2d(FormatContext->streams[Stream->Index]->time_base);
 
-
-    return true;
+    Stream->Valid = true;
 }
 
 video* OpenVideo(const char* InputFilename, NVGcontext* NVG, audio_state* AudioState) {
@@ -88,48 +87,55 @@ video* OpenVideo(const char* InputFilename, NVGcontext* NVG, audio_state* AudioS
         return NULL;
     }
 
-    bool FoundAudio = OpenCodec(AVMEDIA_TYPE_AUDIO,
+    OpenCodec(AVMEDIA_TYPE_AUDIO,
         Video->FormatContext,
         &Video->AudioStream
         );
 
-    bool FoundVideo = OpenCodec(AVMEDIA_TYPE_VIDEO,
+    OpenCodec(AVMEDIA_TYPE_VIDEO,
         Video->FormatContext,
         &Video->VideoStream
         );
-    (void)FoundAudio;
-    (void)FoundVideo;
 
-    Video->Width  = Video->VideoStream.CodecContext->width;
-    Video->Height = Video->VideoStream.CodecContext->height;
+    if (!Video->VideoStream.Valid && !Video->AudioStream.Valid) {
+        av_log(NULL, AV_LOG_ERROR, "Couldn't find an audio or video stream\n");
+        free(Video);
+        return NULL;
+    }
 
-    Video->ColorConvertContext = sws_getContext(
-            Video->Width, Video->Height, Video->VideoStream.CodecContext->pix_fmt,
-            Video->Width, Video->Height, AV_PIX_FMT_RGB24,
-            0, NULL, NULL, NULL);
-    Video->ColorConvertBufferSize = 3*Video->Width*Video->Height;
-    Video->ColorConvertBuffer = malloc(Video->ColorConvertBufferSize);
+    if (Video->VideoStream.Valid) {
+        Video->Width  = Video->VideoStream.CodecContext->width;
+        Video->Height = Video->VideoStream.CodecContext->height;
 
-    Video->Texture = CreateTexture(Video->Width, Video->Height, 3);
-    Video->NVGImage = nvglCreateImageFromHandleGL3(
-                NVG,
-                Video->Texture,
-                Video->Width,
-                Video->Height,
-                NVG_IMAGE_NODELETE // This texture ID isn't owned by NVG,
-                                   // don't delete it when deleting the NVG Image!
-            );
+        Video->ColorConvertContext = sws_getContext(
+                Video->Width, Video->Height, Video->VideoStream.CodecContext->pix_fmt,
+                Video->Width, Video->Height, AV_PIX_FMT_RGB24,
+                0, NULL, NULL, NULL);
+        Video->ColorConvertBufferSize = 3*Video->Width*Video->Height;
+        Video->ColorConvertBuffer = malloc(Video->ColorConvertBufferSize);
+
+        Video->Texture = CreateTexture(Video->Width, Video->Height, 3);
+        Video->NVGImage = nvglCreateImageFromHandleGL3(
+                    NVG,
+                    Video->Texture,
+                    Video->Width,
+                    Video->Height,
+                    NVG_IMAGE_NODELETE // This texture ID isn't owned by NVG,
+                                       // don't delete it when deleting the NVG Image!
+                );
+    }
+
 
     Video->StartTime = GetTimeInSeconds();
 
     // Load the first frame into the Video structure
     DecodeNextFrame(Video);
 
-    printf("Opened %ix%i video with video format %s audio format %s\n",
-        Video->Width, Video->Height,
-        av_get_pix_fmt_name(Video->VideoStream.CodecContext->pix_fmt),
-        av_get_sample_fmt_name(Video->AudioStream.CodecContext->sample_fmt)
-        );
+    // printf("Opened %ix%i video with video format %s audio format %s\n",
+    //     Video->Width, Video->Height,
+    //     av_get_pix_fmt_name(Video->VideoStream.CodecContext->pix_fmt),
+    //     av_get_sample_fmt_name(Video->AudioStream.CodecContext->sample_fmt)
+    //     );
 
     Video->AudioChannel = GetNextChannel(AudioState);
 
@@ -253,6 +259,7 @@ bool FrameIsReady(queued_frame* Frame, double Now) {
 // Checks if the decoder has outpaced us, and drops up to
 // MAX_FRAME_DROP frames if so.
 queued_frame* GetNextFrame(stream* Stream, double Now) {
+    if (!Stream->Valid) return NULL;
 
     const int MAX_FRAME_DROP = QUEUE_FRAMES; // make this equal to QUEUE_FRAMES?
     for (int Readahead = 0; Readahead < MAX_FRAME_DROP; Readahead++) {
@@ -278,6 +285,9 @@ queued_frame* GetNextFrame(stream* Stream, double Now) {
 }
 
 bool TickVideo(video* Video, audio_state* AudioState) {
+    if (!Video) {
+        return false;
+    }
 
     const double Now = GetTimeInSeconds() - Video->StartTime;
 
@@ -304,7 +314,7 @@ bool TickVideo(video* Video, audio_state* AudioState) {
         double FrameDur = Video->VideoStream.Timebase * 1000;
 
         // printf("FrameDur %f\n", FrameDur);
-        int NumFramesToBuffer = (int)(Ahead / FrameDur);
+        int NumFramesToBuffer = floor(Ahead / FrameDur);
         if (NumFramesToBuffer) {
             // printf("%i\n", NumFramesToBuffer);
             NumFramesToBuffer += 10;
@@ -332,6 +342,8 @@ bool TickVideo(video* Video, audio_state* AudioState) {
 }
 
 void FlushStream(stream* Stream) {
+    if (!Stream->Valid) return;
+
     avcodec_flush_buffers(Stream->CodecContext);
     Stream->ReadHead  = 0;
     Stream->WriteHead = 0;
@@ -341,42 +353,56 @@ void FlushStream(stream* Stream) {
 }
 
 void SeekVideo(video* Video, double Timestamp) {
-    int64_t VideoPTS = Timestamp / Video->VideoStream.Timebase;
-    av_seek_frame(Video->FormatContext, Video->VideoStream.Index,
-        VideoPTS, AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_ANY);
+    if (!Video) return;
 
-    int64_t AudioPTS = Timestamp / Video->AudioStream.Timebase;
-    av_seek_frame(Video->FormatContext, Video->AudioStream.Index,
-        AudioPTS, AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_ANY);
+    if (Video->VideoStream.Valid) {
+        int64_t VideoPTS = Timestamp / Video->VideoStream.Timebase;
+        av_seek_frame(Video->FormatContext, Video->VideoStream.Index,
+            VideoPTS, AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_ANY);
+        FlushStream(&Video->VideoStream);
+    }
+
+    if (Video->AudioStream.Valid) {
+        int64_t AudioPTS = Timestamp / Video->AudioStream.Timebase;
+        av_seek_frame(Video->FormatContext, Video->AudioStream.Index,
+            AudioPTS, AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_ANY);
+        FlushStream(&Video->AudioStream);
+    }
 
     Video->StartTime = GetTimeInSeconds() - Timestamp;
-
-    FlushStream(&Video->VideoStream);
-    FlushStream(&Video->AudioStream);
 
     DecodeNextFrame(Video);
 }
 
 void FreeVideo(video* Video, NVGcontext* NVG) {
-    glDeleteTextures(1, &Video->Texture);
-
-    nvgDeleteImage(NVG, Video->NVGImage);
+    if (!Video) return;
 
     av_packet_unref(&Video->Packet);
 
-    for (int FrameIndex = 0; FrameIndex < QUEUE_FRAMES; FrameIndex++) {
-        av_frame_free(&Video->VideoStream.FrameQueue[FrameIndex].Frame);
-        av_frame_free(&Video->AudioStream.FrameQueue[FrameIndex].Frame);
+    if (Video->VideoStream.Valid) {
+        glDeleteTextures(1, &Video->Texture);
+        nvgDeleteImage(NVG, Video->NVGImage);
+        sws_freeContext(Video->ColorConvertContext);
+        free(Video->ColorConvertBuffer);
+
+        for (int FrameIndex = 0; FrameIndex < QUEUE_FRAMES; FrameIndex++) {
+            av_frame_free(&Video->VideoStream.FrameQueue[FrameIndex].Frame);
+        }
+
+        avcodec_close(Video->VideoStream.CodecContext);
+        avcodec_free_context(&Video->VideoStream.CodecContext);
     }
 
-    avcodec_close(Video->VideoStream.CodecContext);
-    avcodec_close(Video->AudioStream.CodecContext);
+    if (Video->AudioStream.Valid) {
+        for (int FrameIndex = 0; FrameIndex < QUEUE_FRAMES; FrameIndex++) {
+            av_frame_free(&Video->AudioStream.FrameQueue[FrameIndex].Frame);
+        }
+
+        avcodec_close(Video->AudioStream.CodecContext);
+        avcodec_free_context(&Video->AudioStream.CodecContext);
+    }
+
     avformat_close_input(&Video->FormatContext);
-    avcodec_free_context(&Video->VideoStream.CodecContext);
-    avcodec_free_context(&Video->AudioStream.CodecContext);
 
-    sws_freeContext(Video->ColorConvertContext);
-
-    free(Video->ColorConvertBuffer);
     free(Video);
 }

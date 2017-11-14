@@ -52,7 +52,8 @@ int main(int argc, char const *argv[])
     // video* Video = OpenVideo("pinball.mov");
     // video* Video = OpenVideo("mario.mp4");
     video* Video1 = OpenVideo("Martin_Luther_King_PBS_interview_with_Kenneth_B._Clark_1963.mp4", NVG, AudioState);
-    video* Video2 = OpenVideo("MartinLutherKing.mp4", NVG, AudioState);
+    // video* Video2 = OpenVideo("MartinLutherKing.mp4", NVG, AudioState);
+    video* Video2 = OpenVideo("Luge 8-6-2016.m4a", NVG, AudioState);
 
     GLuint QuadProgram = CreateVertFragProgramFromPath(
         "quad.vert",
