@@ -1,4 +1,5 @@
 #include "quad.h"
+#include "utils.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -16,25 +17,6 @@ void InitGLEW() {
 }
 
 
-void GLCheck(const char* name) {
-    GLenum Error = glGetError();
-    if (Error != GL_NO_ERROR) {
-        printf("%s: ", name);
-        switch (Error) {
-            case GL_INVALID_ENUM: printf("Invalid enum\n");
-                break;
-            case GL_INVALID_VALUE: printf("Invalid value\n");
-                break;
-            case GL_INVALID_OPERATION: printf("Invalid operation\n");
-                break;
-            case GL_INVALID_FRAMEBUFFER_OPERATION: printf("Invalid framebuffer op\n");
-                break;
-            case GL_OUT_OF_MEMORY: printf("GL Out of memory\n");
-                break;
-        }
-        exit(1);
-    }
-}
 
 GLuint CreateQuad(const float* QuadVertices) {
 
