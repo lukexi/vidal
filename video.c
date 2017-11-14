@@ -298,12 +298,21 @@ bool TickVideo(video* Video, audio_state* AudioState) {
         // If Now has gotten significantly ahead of the video,
         // buffer up some frames
         double Ahead = (Now - VideoFrame->PTS);
-        if (Ahead > 3.0/60.0) {
+
+        // AVCodecContext* CodecContext = Video->VideoStream.CodecContext;
+
+        double FrameDur = Video->VideoStream.Timebase * 1000;
+
+        // printf("FrameDur %f\n", FrameDur);
+        int NumFramesToBuffer = (int)(Ahead / FrameDur);
+        if (NumFramesToBuffer) {
+            // printf("%i\n", NumFramesToBuffer);
+            NumFramesToBuffer += 10;
             // printf("BUFFERING\n");
             // printf("NOW: %f\n", Now);
             // printf("PTS: %f\n", VideoFrame->PTS);
             // printf("AHEAD BY %f\n", Ahead);
-            for (int i = 0; i < 10; i++) {
+            for (int i = 0; i < NumFramesToBuffer; i++) {
                 DecodeNextFrame(Video);
             }
         }
