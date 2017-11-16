@@ -1,8 +1,7 @@
 all: vidal
 
-FLAGS=`pkg-config --libs --cflags SDL2 GLEW libavcodec libavformat libswscale`
+FLAGS=`pkg-config --libs --cflags SDL2 GLEW jack libavcodec libavformat libswscale`
 FLAGS+=-framework OpenGL
-FLAGS+=-lportaudio
 
 SOURCES+=main.c
 SOURCES+=shader.c

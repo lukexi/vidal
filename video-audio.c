@@ -2,61 +2,80 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>
-void PrintPortAudioError(PaError err) {
-    printf("PortAudio error: %s\n", Pa_GetErrorText(err));
-}
+
 
 void CreateRingBuffer(
+    ringbuffer* RingBufferOut,
     ring_buffer_size_t ElementSizeBytes,
-    ring_buffer_size_t ElementCount,
-    void* DataPointer,
-    PaUtilRingBuffer* RingBufferOut) {
+    ring_buffer_size_t ElementCount) {
 
-    DataPointer = malloc(ElementSizeBytes * ElementCount);
-    if (DataPointer == NULL) {
+    RingBufferOut->Storage = malloc(ElementSizeBytes * ElementCount);
+    if (RingBufferOut->Storage == NULL) {
         printf("Ring buffer malloc of %i bytes failed\n", ElementSizeBytes * ElementCount);
         exit(1);
     }
 
     ring_buffer_size_t Result = PaUtil_InitializeRingBuffer(
-        RingBufferOut,
+        &RingBufferOut->RingBuffer,
         ElementSizeBytes,
         ElementCount,
-        DataPointer);
+        RingBufferOut->Storage);
     if (Result != 0) {
         printf("Ring buffer count not a power of 2 (%i)\n", ElementCount);
         exit(1);
     }
 }
 
-int AudioThreadCallback(
-    const void *InputBuffer,
-    void *OutputBuffer,
-    unsigned long SamplesPerBlock,
-    const PaStreamCallbackTimeInfo* TimeInfo,
-    PaStreamCallbackFlags StatusFlags,
-    void *UserData) {
+ring_buffer_size_t GetRingBufferReadAvailable(ringbuffer* RingBuffer) {
+    return PaUtil_GetRingBufferReadAvailable(&RingBuffer->RingBuffer);
+}
 
-    audio_state *S = (audio_state*)UserData;
+
+void ReadRingBuffer(ringbuffer* RingBuffer,
+    void* Result,
+    ring_buffer_size_t ElementCount)
+{
+    PaUtil_ReadRingBuffer(
+        &RingBuffer->RingBuffer,
+        Result,
+        ElementCount);
+}
+
+ring_buffer_size_t WriteRingBuffer(ringbuffer *RingBuffer,
+    const void *Data,
+    ring_buffer_size_t ElementCount)
+{
+    return PaUtil_WriteRingBuffer(
+        &RingBuffer->RingBuffer,
+        Data,
+        ElementCount);
+}
+
+int AudioThreadCallback(
+    jack_nframes_t NumFrames, void *Arg) {
+
+    audio_state *S = (audio_state*)Arg;
+    jack_default_audio_sample_t *OutputBufferLeft  = jack_port_get_buffer(S->OutputPortLeft,  NumFrames);
+    jack_default_audio_sample_t *OutputBufferRight = jack_port_get_buffer(S->OutputPortRight, NumFrames);
 
     // Write silence
-    float *Out = (float*)OutputBuffer;
-    for (int SampleIndex = 0; SampleIndex < SamplesPerBlock; SampleIndex++) {
-        *Out++ = 0;
-        *Out++ = 0;
+    float *OutLeft  = (float*)OutputBufferLeft;
+    float *OutRight = (float*)OutputBufferRight;
+    for (int SampleIndex = 0; SampleIndex < NumFrames; SampleIndex++) {
+        *OutLeft++ = 0;
+        *OutRight++ = 0;
     }
-
 
     for (int ChannelIndex = 0; ChannelIndex < NUM_CHANNELS; ChannelIndex++) {
         audio_channel* Ch = &S->Channels[ChannelIndex];
 
         ring_buffer_size_t NumNewBlocks =
-            PaUtil_GetRingBufferReadAvailable(
-                &Ch->BlocksRingBuf);
+            GetRingBufferReadAvailable(
+                &Ch->BlocksIn);
         for (int Index = 0; Index < NumNewBlocks; Index++) {
             audio_block* NewBlock = &Ch->Blocks[Ch->WriteBlockIndex];
-            PaUtil_ReadRingBuffer(
-                &Ch->BlocksRingBuf,
+            ReadRingBuffer(
+                &Ch->BlocksIn,
                 NewBlock,
                 1);
             Ch->WriteBlockIndex = (Ch->WriteBlockIndex + 1) % AUDIO_QUEUE;
@@ -64,8 +83,9 @@ int AudioThreadCallback(
 
         audio_block* Block = &Ch->Blocks[Ch->ReadBlockIndex];
 
-        float *Out = (float*)OutputBuffer;
-        for (int SampleIndex = 0; SampleIndex < SamplesPerBlock; SampleIndex++) {
+        float *OutLeft  = (float*)OutputBufferLeft;
+        float *OutRight = (float*)OutputBufferRight;
+        for (int SampleIndex = 0; SampleIndex < NumFrames; SampleIndex++) {
 
             float Amp = 0;
 
@@ -91,8 +111,8 @@ int AudioThreadCallback(
                 Block->NextSampleIndex++;
             }
 
-            *Out++ += Amp;
-            *Out++ += Amp;
+            *OutputBufferLeft++  += Amp;
+            *OutputBufferRight++ += Amp;
         }
     }
 
@@ -106,10 +126,74 @@ int GetNextChannel(audio_state* AudioState) {
     return Next;
 }
 
+bool StartJack(audio_state* AudioState) {
+    const char **Ports;
+    const char *ClientName = "VideoAudioEngine";
+    const char *ServerName = NULL;
+    jack_options_t Options = JackNullOption;
+    jack_status_t Status;
+
+    AudioState->Client = jack_client_open(ClientName, Options, &Status, ServerName);
+    if (AudioState->Client == NULL) {
+        fprintf(stderr, "jack_client_open() failed, "
+             "status = 0x%2.0x\n", Status);
+        if (Status & JackServerFailed) {
+            fprintf(stderr, "Unable to connect to JACK server\n");
+        }
+        return false;
+    }
+    if (Status & JackServerStarted) {
+        fprintf(stderr, "JACK server started\n");
+    }
+
+    if (Status & JackNameNotUnique) {
+        ClientName = jack_get_client_name(AudioState->Client);
+        fprintf(stderr, "unique name `%s' assigned\n", ClientName);
+    }
+
+
+    jack_set_process_callback(AudioState->Client, AudioThreadCallback, (void*)AudioState);
+    // jack_on_shutdown(client, jack_shutdown, 0);
+
+    printf("engine sample rate: %" PRIu32 "\n",
+        jack_get_sample_rate(AudioState->Client));
+
+    AudioState->OutputPortLeft = jack_port_register(AudioState->Client,  "output_left",
+                      JACK_DEFAULT_AUDIO_TYPE,
+                      JackPortIsOutput|JackPortIsTerminal, 0);
+    AudioState->OutputPortRight = jack_port_register(AudioState->Client, "output_right",
+                      JACK_DEFAULT_AUDIO_TYPE,
+                      JackPortIsOutput|JackPortIsTerminal, 0);
+
+    if (AudioState->OutputPortLeft == NULL || AudioState->OutputPortRight == NULL) {
+        fprintf(stderr, "no more JACK ports available\n");
+        return false;
+    }
+
+    if (jack_activate(AudioState->Client)) {
+        fprintf(stderr, "cannot activate client");
+        return false;
+    }
+
+    // "Input" here meaning we are "Inputting to JACK",
+    Ports = jack_get_ports(AudioState->Client, NULL, NULL, JackPortIsPhysical|JackPortIsInput);
+    if (Ports == NULL) {
+        fprintf(stderr, "no physical playback ports\n");
+        return false;
+    }
+
+    if (jack_connect(AudioState->Client, jack_port_name(AudioState->OutputPortLeft), Ports[0])
+        || jack_connect(AudioState->Client, jack_port_name(AudioState->OutputPortRight), Ports[1])) {
+        fprintf(stderr, "cannot connect output ports\n");
+        free(Ports);
+        return false;
+    }
+
+    free(Ports);
+    return true;
+}
+
 audio_state* StartAudio() {
-    PaError Err;
-    Err = Pa_Initialize();
-    if (Err != paNoError) { PrintPortAudioError(Err); return NULL; }
 
     audio_state* AudioState = calloc(1, sizeof(audio_state));
 
@@ -117,40 +201,14 @@ audio_state* StartAudio() {
 
     for (int ChannelIndex = 0; ChannelIndex < NUM_CHANNELS; ChannelIndex++) {
         audio_channel* Ch = &AudioState->Channels[ChannelIndex];
-        CreateRingBuffer(sizeof(audio_block), RingBufSize, Ch->BlocksRingBufStorage, &Ch->BlocksRingBuf);
+        CreateRingBuffer(&Ch->BlocksIn, sizeof(audio_block), RingBufSize);
     }
 
-    if (Pa_GetDeviceCount() == 0) { return NULL; }
-
-    PaDeviceIndex OutputDeviceIndex = Pa_GetDefaultOutputDevice();
-
-    const PaDeviceInfo* OutputDeviceInfo = Pa_GetDeviceInfo(OutputDeviceIndex);
-
-    PaTime OutputDeviceLatency = OutputDeviceInfo->defaultLowOutputLatency;
-
-    PaStreamParameters OutputParameters = {
-        .device = OutputDeviceIndex,
-        .channelCount = 2,
-        .sampleFormat = paFloat32,
-        .suggestedLatency = OutputDeviceLatency,
-        .hostApiSpecificStreamInfo = NULL
-    };
-
-    PaStream *Stream;
-    /* Open an audio I/O stream. */
-    Err = Pa_OpenStream(
-        &Stream,
-        NULL,
-        &OutputParameters,
-        SAMPLE_RATE,            // Samples per second
-        BLOCK_SIZE,             // Samples per block (will be * the num channels)
-        paNoFlag,               // PaStreamFlags
-        AudioThreadCallback,    // Your callback function
-        AudioState);            // A pointer that will be passed to your callback
-    if (Err != paNoError) { PrintPortAudioError(Err); return NULL; }
-
-    Err = Pa_StartStream(Stream);
-    if (Err != paNoError) { PrintPortAudioError(Err); return NULL; }
+    bool JackStarted = StartJack(AudioState);
+    if (!JackStarted) {
+        free(AudioState);
+        return NULL;
+    }
 
     return AudioState;
 }

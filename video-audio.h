@@ -1,8 +1,8 @@
 #ifndef VIDEO_AUDIO_H
 #define VIDEO_AUDIO_H
 
-#include <portaudio.h>
 #include "pa_ringbuffer.h"
+#include <jack/jack.h>
 
 #define SAMPLE_RATE 44100
 #define BLOCK_SIZE 128
@@ -12,14 +12,22 @@
 #define NUM_CHANNELS 16
 
 typedef struct {
+    PaUtilRingBuffer RingBuffer;
+    void*            Storage;
+} ringbuffer;
+
+ring_buffer_size_t GetRingBufferReadAvailable(ringbuffer* RingBuffer);
+void ReadRingBuffer(ringbuffer* RingBuffer, void* Result, ring_buffer_size_t ElementCount);
+ring_buffer_size_t WriteRingBuffer(ringbuffer *RingBuffer, const void *Data, ring_buffer_size_t ElementCount);
+
+typedef struct {
     float* Samples;
     int Length;
     int NextSampleIndex;
 } audio_block;
 
 typedef struct {
-    PaUtilRingBuffer BlocksRingBuf;
-    void*            BlocksRingBufStorage;
+    ringbuffer BlocksIn;
     int ReadBlockIndex;
     int WriteBlockIndex;
     audio_block Blocks[AUDIO_QUEUE];
@@ -28,7 +36,9 @@ typedef struct {
 typedef struct {
     audio_channel Channels[NUM_CHANNELS];
     int NextChannel;
-    PaStream* Stream;
+    jack_port_t *OutputPortLeft;
+    jack_port_t *OutputPortRight;
+    jack_client_t *Client;
 } audio_state;
 
 audio_state* StartAudio();

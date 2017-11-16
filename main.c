@@ -14,6 +14,7 @@
 
 void DrawVideo(video* Video, GLuint QuadProgram, GLuint Quad)
 {
+    if (!Video) return;
     glUniform1i(glGetUniformLocation(QuadProgram, "uTex"), 0);
 
     glActiveTexture(GL_TEXTURE0);
@@ -51,9 +52,11 @@ int main(int argc, char const *argv[])
 
     // video* Video = OpenVideo("pinball.mov");
     // video* Video = OpenVideo("mario.mp4");
-    video* Video1 = OpenVideo("Martin_Luther_King_PBS_interview_with_Kenneth_B._Clark_1963.mp4", NVG, AudioState);
-    // video* Video2 = OpenVideo("MartinLutherKing.mp4", NVG, AudioState);
-    video* Video2 = OpenVideo("Luge 8-6-2016.m4a", NVG, AudioState);
+    // video* Video1 = OpenVideo("Martin_Luther_King_PBS_interview_with_Kenneth_B._Clark_1963.mp4", NVG, AudioState);
+    video* Video1 = OpenVideo("Martin_Luther_King_Ive_Been_To_The_Mountaintop_1968.mp4", NVG, AudioState);
+    video* Video2 = OpenVideo("kitty.mp4", NVG, AudioState);
+    // video* Video2 = OpenVideo("best_token_table_clip_sm2.mp4", NVG, AudioState);
+    // video* Video2 = OpenVideo("Luge 8-6-2016.m4a", NVG, AudioState);
 
     GLuint QuadProgram = CreateVertFragProgramFromPath(
         "quad.vert",

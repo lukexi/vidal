@@ -11,7 +11,6 @@ double GetTimeInSeconds() {
     return (double)GetTimeInMicros() / 1000000.0;
 }
 
-
 void OpenCodec(
     enum AVMediaType MediaType,
     AVFormatContext* FormatContext,
@@ -207,7 +206,6 @@ void DecodeNextFrame(video* Video) {
     }
 }
 
-
 void UploadVideoFrame(video* Video, AVFrame* Frame) {
     // Use https://www.ffmpeg.org/ffmpeg-scaler.html
     // to convert from YUV420P to packed RGB24
@@ -244,7 +242,7 @@ void QueueAudioFrame(AVFrame* Frame, video* Video, audio_state* AudioState) {
         .NextSampleIndex = 0
     };
 
-    PaUtil_WriteRingBuffer(&AudioState->Channels[Video->AudioChannel].BlocksRingBuf, &AudioBlock, 1);
+    WriteRingBuffer(&AudioState->Channels[Video->AudioChannel].BlocksIn, &AudioBlock, 1);
 }
 
 void MarkFramePresented(queued_frame* QFrame) {
@@ -271,7 +269,7 @@ queued_frame* GetNextFrame(stream* Stream, double Now) {
         // If the current frame and the next frame are ready,
         // drop the current frame.
         if (FrameIsReady(CurrFrame, Now) && FrameIsReady(NextFrame, Now)) {
-            // printf("DROPPING A FRAME\n");
+            printf("DROPPING A FRAME\n");
             MarkFramePresented(CurrFrame);
         }
         // If the current frame is ready and the next frame is not,
@@ -318,7 +316,7 @@ bool TickVideo(video* Video, audio_state* AudioState) {
         if (NumFramesToBuffer) {
             // printf("%i\n", NumFramesToBuffer);
             NumFramesToBuffer += 10;
-            // printf("BUFFERING\n");
+            printf("BUFFERING %i\n", NumFramesToBuffer);
             // printf("NOW: %f\n", Now);
             // printf("PTS: %f\n", VideoFrame->PTS);
             // printf("AHEAD BY %f\n", Ahead);
@@ -333,6 +331,7 @@ bool TickVideo(video* Video, audio_state* AudioState) {
 
     if (Video->EndOfStream) {
         Video->EndOfStream = 0;
+        printf("SEEKING\n");
         SeekVideo(Video, 0);
     }
 
