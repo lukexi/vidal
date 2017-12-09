@@ -5,6 +5,11 @@
 #include "nanovg_gl.h"
 #include "video-audio.h"
 
+typedef struct {
+    void* Data;
+
+} bounded_queue;
+
 void DecodeNextFrame(video* Video);
 
 double GetTimeInSeconds() {
@@ -215,7 +220,7 @@ void UploadVideoFrame(video* Video, AVFrame* Frame) {
     int Result = sws_scale(Video->ColorConvertContext,
         (const uint8_t *const *)Frame->data,
         Frame->linesize,
-        0,      // Begin slice
+        0,             // Begin slice
         Video->Height, // Num slices
         OutputData,
         OutputLineSize);
@@ -275,6 +280,7 @@ queued_frame* GetNextFrame(stream* Stream, double Now) {
         // If the current frame is ready and the next frame is not,
         // return the current frame.
         else if (FrameIsReady(CurrFrame, Now)) {
+            printf("Presenting! %f\n", CurrFrame->PTS);
             Stream->ReadHead = NextHead;
             return CurrFrame;
         }
@@ -292,12 +298,14 @@ bool TickVideo(video* Video, audio_state* AudioState) {
     // FIXME: Pull along the audio/video ReadHeads until the PTS is roughly in sync
     queued_frame* VideoFrame = GetNextFrame(&Video->VideoStream, Now);
     if (VideoFrame) {
+        printf("VIDEO FRAME\n");
         UploadVideoFrame(Video, VideoFrame->Frame);
         MarkFramePresented(VideoFrame);
     }
 
     queued_frame* AudioFrame = GetNextFrame(&Video->AudioStream, Now);
     if (AudioFrame) {
+        printf("AUDIO FRAME\n");
         QueueAudioFrame(AudioFrame->Frame, Video, AudioState);
         MarkFramePresented(AudioFrame);
     }
@@ -313,9 +321,10 @@ bool TickVideo(video* Video, audio_state* AudioState) {
 
         // printf("FrameDur %f\n", FrameDur);
         int NumFramesToBuffer = floor(Ahead / FrameDur);
+        printf("Number of frames to buffer: %i\n", NumFramesToBuffer);
         if (NumFramesToBuffer) {
             // printf("%i\n", NumFramesToBuffer);
-            NumFramesToBuffer += 10;
+            // NumFramesToBuffer += 1;
             printf("BUFFERING %i\n", NumFramesToBuffer);
             // printf("NOW: %f\n", Now);
             // printf("PTS: %f\n", VideoFrame->PTS);

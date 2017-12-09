@@ -50,13 +50,15 @@ int main(int argc, char const *argv[])
 
     NVGcontext* NVG = nvgCreateGL3(0);
 
-    // video* Video = OpenVideo("pinball.mov");
-    // video* Video = OpenVideo("mario.mp4");
-    // video* Video1 = OpenVideo("Martin_Luther_King_PBS_interview_with_Kenneth_B._Clark_1963.mp4", NVG, AudioState);
-    video* Video1 = OpenVideo("Martin_Luther_King_Ive_Been_To_The_Mountaintop_1968.mp4", NVG, AudioState);
-    video* Video2 = OpenVideo("kitty.mp4", NVG, AudioState);
-    // video* Video2 = OpenVideo("best_token_table_clip_sm2.mp4", NVG, AudioState);
-    // video* Video2 = OpenVideo("Luge 8-6-2016.m4a", NVG, AudioState);
+    // video* Video = OpenVideo("videos/pinball.mov");
+    // video* Video = OpenVideo("videos/mario.mp4");
+    // video* Video1 = OpenVideo("videos/Martin_Luther_King_PBS_interview_with_Kenneth_B._Clark_1963.mp4", NVG, AudioState);
+    // video* Video1 = OpenVideo("videos/timeline-students.mov", NVG, AudioState);
+    // video* Video2 = OpenVideo("videos/timeline-research-gallery.mov", NVG, AudioState);
+    // video* Video2 = OpenVideo("videos/best_token_table_clip_sm2.mp4", NVG, AudioState);
+    // video* Video2 = OpenVideo("videos/Luge 8-6-2016.m4a", NVG, AudioState);
+    video* Video1 = OpenVideo("videos/tmnt.mp4", NVG, AudioState);
+    // video* Video2 = OpenVideo("videos/tmnt.mp4", NVG, AudioState);
 
     GLuint QuadProgram = CreateVertFragProgramFromPath(
         "quad.vert",
@@ -70,17 +72,18 @@ int main(int argc, char const *argv[])
         0, 0    // Right Bottom
     };
     GLuint Quad1 = CreateQuad(Verts1);
-    float Verts2[8] = {
-        0, 0, // Left Top
-        0, 1,  // Left Bottom
-        1, 0,  // Right Top
-        1, 1    // Right Bottom
-    };
-    GLuint Quad2 = CreateQuad(Verts2);
+
+    // float Verts2[8] = {
+    //     0, 0, // Left Top
+    //     0, 1,  // Left Bottom
+    //     1, 0,  // Right Top
+    //     1, 1    // Right Bottom
+    // };
+    // GLuint Quad2 = CreateQuad(Verts2);
 
     while (1) {
         TickVideo(Video1, AudioState);
-        TickVideo(Video2, AudioState);
+        // TickVideo(Video2, AudioState);
 
         SDL_Event Event;
         while (SDL_PollEvent(&Event)) {
@@ -91,13 +94,13 @@ int main(int argc, char const *argv[])
         glClear(GL_COLOR_BUFFER_BIT);
 
         DrawVideo(Video1, QuadProgram, Quad1);
-        DrawVideo(Video2, QuadProgram, Quad2);
+        // DrawVideo(Video2, QuadProgram, Quad2);
 
         SDL_GL_SwapWindow(Window);
     }
 
     FreeVideo(Video1, NVG);
-    FreeVideo(Video2, NVG);
+    // FreeVideo(Video2, NVG);
 
     return 0;
 }

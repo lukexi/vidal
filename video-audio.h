@@ -1,7 +1,7 @@
 #ifndef VIDEO_AUDIO_H
 #define VIDEO_AUDIO_H
 
-#include "pa_ringbuffer.h"
+#include "ringbuffer.h"
 #include <jack/jack.h>
 
 #define SAMPLE_RATE 44100
@@ -10,15 +10,6 @@
 #define AUDIO_QUEUE 16 // must be power of 2
 
 #define NUM_CHANNELS 16
-
-typedef struct {
-    PaUtilRingBuffer RingBuffer;
-    void*            Storage;
-} ringbuffer;
-
-ring_buffer_size_t GetRingBufferReadAvailable(ringbuffer* RingBuffer);
-void ReadRingBuffer(ringbuffer* RingBuffer, void* Result, ring_buffer_size_t ElementCount);
-ring_buffer_size_t WriteRingBuffer(ringbuffer *RingBuffer, const void *Data, ring_buffer_size_t ElementCount);
 
 typedef struct {
     float* Samples;

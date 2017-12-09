@@ -8,6 +8,7 @@ SOURCES+=shader.c
 SOURCES+=quad.c
 SOURCES+=texture.c
 SOURCES+=pa_ringbuffer.c
+SOURCES+=ringbuffer.c
 SOURCES+=video-audio.c
 SOURCES+=utils.c
 SOURCES+=video.c
