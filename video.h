@@ -46,6 +46,7 @@ typedef struct {
     audio_state* AudioState;
 
     pthread_t DecodeThread;
+    bool StopDecodeThread;
 
     bool VideoDidSeek;
     AVFrame* PendingVideoFrame;

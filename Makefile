@@ -1,4 +1,4 @@
-all: vidal
+all: vidal.app
 
 FLAGS=`pkg-config --libs --cflags SDL2 GLEW jack libavcodec libavformat libswscale`
 FLAGS+=-framework OpenGL
@@ -16,5 +16,5 @@ SOURCES+=video.c
 SOURCES+=nanovg.c
 SOURCES+=mvar.c
 
-vidal: $(SOURCES)
+vidal.app: $(SOURCES)
 	clang -o $@.app $^ $(FLAGS) -g -Wall

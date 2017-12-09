@@ -65,8 +65,7 @@ void OpenCodec(
 void* DecodeThreadMain(void* Arg) {
     video* Video = Arg;
 
-    bool StreamEnded = false;
-    while (!StreamEnded) {
+    while (!Video->StopDecodeThread) {
         TickVideo(Video);
     }
     return NULL;
@@ -256,6 +255,10 @@ void UpdateVideoFrame(video* Video) {
         double VideoTime = GetVideoTime(Video);
         // printf("FRAME: %f NOW: %f\n", FramePTS, VideoTime);
         if (FramePTS <= VideoTime) {
+
+            // FIXME: Keep dequeuing frames here until FramePTS > VideoTime.
+            // Don't upload intermediate frames.
+
             // printf("UPLOADING\n");
             UploadVideoFrame(Video, Frame);
             av_frame_free(&Frame);
@@ -292,10 +295,6 @@ void QueueAudioFrame(AVFrame* Frame, video* Video) {
 
     WriteRingBuffer(&AudioState->Channels[Video->AudioChannel].BlocksIn, &AudioBlock, 1);
 }
-
-// bool FrameIsReady(queued_frame* Frame, double Now) {
-//     return !Frame->Presented && Now >= Frame->PTS;
-// }
 
 double GetVideoTime(video* Video) {
     return GetTimeInSeconds() - Video->StartTime;
@@ -377,6 +376,9 @@ void SeekVideo(video* Video, double Timestamp) {
 
 void FreeVideo(video* Video, NVGcontext* NVG) {
     if (!Video) return;
+
+    Video->StopDecodeThread = true;
+    pthread_join(Video->DecodeThread, NULL);
 
     av_packet_unref(&Video->Packet);
 
