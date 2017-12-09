@@ -15,7 +15,6 @@
 void DrawVideo(video* Video, GLuint QuadProgram, GLuint Quad)
 {
     if (!Video) return;
-    UpdateVideoFrame(Video);
 
     glUniform1i(glGetUniformLocation(QuadProgram, "uTex"), 0);
 
@@ -90,6 +89,9 @@ int main(int argc, char const *argv[])
             if (Event.type == SDL_QUIT) exit(0);
         }
 
+        TickVideo(Video1);
+        // TickVideo(Video2);
+
         glClearColor(0, 0.1, 0.1, 1);
         glClear(GL_COLOR_BUFFER_BIT);
 
@@ -99,8 +101,8 @@ int main(int argc, char const *argv[])
         SDL_GL_SwapWindow(Window);
     }
 
-    FreeVideo(Video1, NVG);
-    // FreeVideo(Video2, NVG);
+    FreeVideo(Video1);
+    // FreeVideo(Video2);
 
     return 0;
 }

@@ -10,7 +10,7 @@
 #define FRAME_BUFFER_SIZE 32
 #define HALF_FRAME_BUFFER_SIZE (FRAME_BUFFER_SIZE / 2)
 
-void TickVideo(video* Video);
+void DecodeVideo(video* Video);
 
 double GetVideoFrameDuration(video* Video);
 double GetVideoTime(video* Video);
@@ -70,7 +70,7 @@ void* DecodeThreadMain(void* Arg) {
     video* Video = Arg;
 
     while (!Video->StopDecodeThread) {
-        TickVideo(Video);
+        DecodeVideo(Video);
     }
     return NULL;
 }
@@ -79,6 +79,7 @@ video* OpenVideo(const char* InputFilename, NVGcontext* NVG, audio_state* AudioS
     video* Video = calloc(1, sizeof(video));
 
     Video->AudioState = AudioState;
+    Video->NVG = NVG;
 
     int Result;
 
@@ -239,7 +240,7 @@ void UploadVideoFrame(video* Video, AVFrame* Frame) {
     UpdateTexture(Video->Texture, Video->Width, Video->Height, GL_RGB, Video->ColorConvertBuffer);
 }
 
-void UpdateVideoFrame(video* Video) {
+void TickVideo(video* Video) {
     if (Video->VideoDidSeek) {
         Video->VideoDidSeek = false;
         Video->PendingVideoFrame = NULL;
@@ -304,7 +305,8 @@ double GetVideoTime(video* Video) {
     return GetTimeInSeconds() - Video->StartTime;
 }
 
-void TickVideo(video* Video) {
+// Decodes video so long as there is buffer space available.
+void DecodeVideo(video* Video) {
     if (!Video) {
         return;
     }
@@ -378,7 +380,7 @@ void SeekVideo(video* Video, double Timestamp) {
     Video->StartTime = GetTimeInSeconds() - Timestamp;
 }
 
-void FreeVideo(video* Video, NVGcontext* NVG) {
+void FreeVideo(video* Video) {
     if (!Video) return;
 
     Video->StopDecodeThread = true;
@@ -388,7 +390,7 @@ void FreeVideo(video* Video, NVGcontext* NVG) {
 
     if (Video->VideoStream.Valid) {
         glDeleteTextures(1, &Video->Texture);
-        nvgDeleteImage(NVG, Video->NVGImage);
+        nvgDeleteImage(Video->NVG, Video->NVGImage);
         sws_freeContext(Video->ColorConvertContext);
         free(Video->ColorConvertBuffer);
 

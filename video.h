@@ -42,6 +42,7 @@ typedef struct {
 
     double StartTime;
 
+    NVGcontext* NVG;
     int AudioChannel;
     audio_state* AudioState;
 
@@ -58,12 +59,12 @@ typedef struct {
 
 video* OpenVideo(const char* InputFilename, NVGcontext* NVG, audio_state* AudioState);
 
-void FreeVideo(video* Video, NVGcontext* NVG);
+void FreeVideo(video* Video);
 
 // Uploads a frame to the graphics
 // card when that frame's presentation
 // time arrives.
 // Should be called as fast as possible.
-void UpdateVideoFrame(video* Video);
+void TickVideo(video* Video);
 
 #endif // VIDEO_H
