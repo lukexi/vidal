@@ -38,6 +38,7 @@ int AudioThreadCallback(
 
         float *OutLeft  = (float*)OutputBufferLeft;
         float *OutRight = (float*)OutputBufferRight;
+        bool FoundSomethin = false;
         for (int SampleIndex = 0; SampleIndex < NumFrames; SampleIndex++) {
 
             float Amp = 0;
@@ -47,6 +48,7 @@ int AudioThreadCallback(
             for (int Tries = 0; Tries < AUDIO_QUEUE; Tries++) {
                 if (Block->NextSampleIndex < Block->Length) {
                     OKToRead = true;
+                    FoundSomethin = true;
                     break;
                 }
                 else {
@@ -68,7 +70,6 @@ int AudioThreadCallback(
             *OutRight++ += Amp;
         }
     }
-
 
     return 0;
 }

@@ -61,9 +61,9 @@ int main(int argc, char const *argv[])
 
     const char* VideoNames[] = {
         "videos/Martin_Luther_King_PBS_interview_with_Kenneth_B._Clark_1963.mp4",
-        "videos/tmnt.mp4",
-        "videos/timeline-students.mov",
-        "videos/best_token_table_clip_sm2.mp4",
+        // "videos/tmnt.mp4",
+        // "videos/timeline-students.mov",
+        // "videos/best_token_table_clip_sm2.mp4",
         // "videos/Luge 8-6-2016.m4a"
     };
 

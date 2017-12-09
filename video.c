@@ -7,7 +7,7 @@
 #include <pthread.h>
 #include <assert.h>
 
-#define FRAME_BUFFER_SIZE 32
+#define FRAME_BUFFER_SIZE 128
 #define HALF_FRAME_BUFFER_SIZE (FRAME_BUFFER_SIZE / 2)
 
 void DecodeVideo(video* Video);
@@ -275,7 +275,9 @@ void TickVideo(video* Video) {
     }
 }
 
-ring_buffer_size_t CheckAudioBuffer(video* Video) {
+
+
+ring_buffer_size_t GetAudioChannelCapacity(video* Video) {
     audio_state* AudioState = Video->AudioState;
     return GetRingBufferWriteAvailable(&AudioState->Channels[Video->AudioChannel].BlocksIn);
 }
@@ -306,6 +308,8 @@ double GetVideoTime(video* Video) {
     return GetTimeInSeconds() - Video->StartTime;
 }
 
+
+
 // Decodes video so long as there is buffer space available.
 void DecodeVideo(video* Video) {
     if (!Video) {
@@ -318,30 +322,73 @@ void DecodeVideo(video* Video) {
     // printf("Number of buffered audio frames: %i\n", NumBufferedAudioFrames);
     // printf("Number of buffered video frames: %i\n", NumBufferedVideoFrames);
     if (
-        // NumBufferedAudioFrames < HALF_FRAME_BUFFER_SIZE ||
-        NumBufferedVideoFrames < HALF_FRAME_BUFFER_SIZE) {
+        NumBufferedAudioFrames < HALF_FRAME_BUFFER_SIZE
+        // NumBufferedVideoFrames < HALF_FRAME_BUFFER_SIZE
+        ) {
+        // printf("DECODING A BUNCHA SHIT\n");
         DecodeNextFrame(Video);
     }
 
-    // const double Now = GetVideoTime(Video);
 
     // Send in audio
+    const double Now = GetVideoTime(Video);
+    stream* AudioStream     = &Video->AudioStream;
+    ringbuffer* AudioBuffer = &Video->AudioStream.Buffer;
     bool CaughtUp = false;
 
-    while (!CaughtUp) {
-        NumBufferedAudioFrames = GetRingBufferReadAvailable(&Video->AudioStream.Buffer);
-        ring_buffer_size_t AudioBufferCapacity = CheckAudioBuffer(Video);
-        if (NumBufferedAudioFrames > 0 && AudioBufferCapacity > 0) {
-            AVFrame* Frame = NULL;
-            ReadRingBuffer(&Video->AudioStream.Buffer, &Frame, 1);
-            if (GetFramePTS(Frame, &Video->AudioStream) >= GetVideoTime(Video)) {
-                CaughtUp = true;
-                QueueAudioFrame(Frame, Video);
-            } else {
-                printf("SKIPPING AN AUDIO FRAME\n");
-            }
-            av_frame_free(&Frame);
-        } else {
+    if (!GetAudioChannelCapacity(Video)) {
+        printf("NO AUDIO CHANNEL CAPAC\n");
+    }
+    if (!(GetRingBufferReadAvailable(AudioBuffer) > 2)) {
+        printf("NO AUDIO BUFFER SUPPLY\n");
+    }
+    while ((!CaughtUp) &&
+            GetAudioChannelCapacity(Video) > 0 &&
+            GetRingBufferReadAvailable(AudioBuffer) >= 2)
+    {
+        AVFrame* Frames[2];
+        PeekRingBuffer(AudioBuffer, Frames, 2);
+
+        AVFrame* CurrFrame = Frames[0];
+        AVFrame* NextFrame = Frames[1];
+
+        const double CurrPTS = GetFramePTS(CurrFrame, AudioStream);
+        const double NextPTS = GetFramePTS(NextFrame, AudioStream);
+
+
+        // printf("Now %f Cur: %f Nex: %f\n", Now,
+        //     CurrPTS,
+        //     NextPTS);
+        // const double FrameDur = NextPTS - CurrPTS;
+
+        if (CurrPTS <= Now &&
+            NextPTS >  Now) {
+            // printf("QUEUEING! %f\n", Now);
+            QueueAudioFrame(CurrFrame, Video);
+            QueueAudioFrame(NextFrame, Video);
+            AdvanceRingBufferReadIndex(AudioBuffer, 2);
+            av_frame_free(&CurrFrame);
+            av_frame_free(&NextFrame);
+
+            // for (int i = 0; i < HALF_FRAME_BUFFER_SIZE; ++i)
+            // {
+            //     AVFrame* Frame;
+            //     int DidRead = ReadRingBuffer(AudioBuffer, &Frame, 1);
+            //     if (DidRead) {
+            //         QueueAudioFrame(Frame, Video);
+            //         av_frame_free(&Frame);
+            //     }
+            // }
+
+            // printf("****** CHANNEL: %i VIDEOAUDIO: %i \n", GetAudioChannelCapacity(Video), GetRingBufferReadAvailable(AudioBuffer));
+            CaughtUp = true;
+        } else if (CurrPTS < Now && NextPTS < Now) {
+            printf("MISSED\n");
+            AdvanceRingBufferReadIndex(AudioBuffer, 2);
+            av_frame_free(&CurrFrame);
+            av_frame_free(&NextFrame);
+        } else if (CurrPTS > Now && NextPTS > Now) {
+            // printf("WAITING\n");
             CaughtUp = true;
         }
     }
