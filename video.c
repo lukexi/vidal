@@ -7,7 +7,7 @@
 #include <pthread.h>
 #include <assert.h>
 
-#define FRAME_BUFFER_SIZE 128
+#define FRAME_BUFFER_SIZE 32 // Must be power of 2
 #define HALF_FRAME_BUFFER_SIZE (FRAME_BUFFER_SIZE / 2)
 
 void DecodeVideo(video* Video);
@@ -241,41 +241,51 @@ void UploadVideoFrame(video* Video, AVFrame* Frame) {
     UpdateTexture(Video->Texture, Video->Width, Video->Height, GL_RGB, Video->ColorConvertBuffer);
 }
 
-void TickVideo(video* Video) {
-    if (Video->VideoDidSeek) {
-        Video->VideoDidSeek = false;
-        Video->PendingVideoFrame = NULL;
-    }
 
-    AVFrame* Frame = Video->PendingVideoFrame;
+void GetCurrentFrame(const char* Label, video* Video, stream* Stream, AVFrame** Frame) {
+    const double Now = GetVideoTime(Video);
 
-    if (!Frame) {
-        ring_buffer_size_t FramesCount = GetRingBufferReadAvailable(&Video->VideoStream.Buffer);
-        if (FramesCount > 0) {
-            ReadRingBuffer(&Video->VideoStream.Buffer, &Frame, 1);
-        }
-    }
+    bool CaughtUp = false;
+    while ((!CaughtUp) &&
+            GetRingBufferReadAvailable(&Stream->Buffer) >= 2)
+    {
+        AVFrame* Frames[2];
+        PeekRingBuffer(&Stream->Buffer, Frames, 2);
 
-    if (Frame) {
-        double FramePTS  = GetFramePTS(Frame, &Video->VideoStream);
-        double VideoTime = GetVideoTime(Video);
+        AVFrame* CurrFrame = Frames[0];
+        AVFrame* NextFrame = Frames[1];
 
-        if (FramePTS <= VideoTime) {
+        const double CurrPTS = GetFramePTS(CurrFrame, Stream);
+        const double NextPTS = GetFramePTS(NextFrame, Stream);
 
-            // FIXME: Keep dequeuing frames here until FramePTS > VideoTime.
-            // Don't upload intermediate frames.
-
-            // printf("UPLOADING\n");
-            UploadVideoFrame(Video, Frame);
-            av_frame_free(&Frame);
-            Video->PendingVideoFrame = NULL;
-        } else {
-            Video->PendingVideoFrame = Frame;
+        if (CurrPTS <= Now &&
+            NextPTS >  Now) {
+            // printf("%s NOW: %f FRAME: %f \n", Label, Now, CurrPTS);
+            *Frame = CurrFrame;
+            AdvanceRingBufferReadIndex(&Stream->Buffer, 1);
+            CaughtUp = true;
+        } else if (CurrPTS < Now && NextPTS < Now) {
+            // Drop the frame
+            AdvanceRingBufferReadIndex(&Stream->Buffer, 1);
+            printf("DROPPING A FRAME\n");
+            av_frame_free(&CurrFrame);
+        } else if (CurrPTS > Now && NextPTS > Now) {
+            // Not time for this frame yet
+            CaughtUp = true;
         }
     }
 }
 
 
+void TickVideo(video* Video) {
+
+    AVFrame* VideoFrame = NULL;
+    GetCurrentFrame("V", Video, &Video->VideoStream, &VideoFrame);
+    if (VideoFrame) {
+        UploadVideoFrame(Video, VideoFrame);
+        av_frame_free(&VideoFrame);
+    }
+}
 
 ring_buffer_size_t GetAudioChannelCapacity(video* Video) {
     audio_state* AudioState = Video->AudioState;
@@ -330,71 +340,15 @@ void DecodeVideo(video* Video) {
     }
 
 
-    // Send in audio
-    const double Now = GetVideoTime(Video);
-    stream* AudioStream     = &Video->AudioStream;
-    ringbuffer* AudioBuffer = &Video->AudioStream.Buffer;
-    bool CaughtUp = false;
-
-    if (!GetAudioChannelCapacity(Video)) {
-        printf("NO AUDIO CHANNEL CAPAC\n");
-    }
-    if (!(GetRingBufferReadAvailable(AudioBuffer) > 2)) {
-        printf("NO AUDIO BUFFER SUPPLY\n");
-    }
-    while ((!CaughtUp) &&
-            GetAudioChannelCapacity(Video) > 0 &&
-            GetRingBufferReadAvailable(AudioBuffer) >= 2)
-    {
-        AVFrame* Frames[2];
-        PeekRingBuffer(AudioBuffer, Frames, 2);
-
-        AVFrame* CurrFrame = Frames[0];
-        AVFrame* NextFrame = Frames[1];
-
-        const double CurrPTS = GetFramePTS(CurrFrame, AudioStream);
-        const double NextPTS = GetFramePTS(NextFrame, AudioStream);
-
-
-        // printf("Now %f Cur: %f Nex: %f\n", Now,
-        //     CurrPTS,
-        //     NextPTS);
-        // const double FrameDur = NextPTS - CurrPTS;
-
-        if (CurrPTS <= Now &&
-            NextPTS >  Now) {
-            // printf("QUEUEING! %f\n", Now);
-            QueueAudioFrame(CurrFrame, Video);
-            QueueAudioFrame(NextFrame, Video);
-            AdvanceRingBufferReadIndex(AudioBuffer, 2);
-            av_frame_free(&CurrFrame);
-            av_frame_free(&NextFrame);
-
-            // for (int i = 0; i < HALF_FRAME_BUFFER_SIZE; ++i)
-            // {
-            //     AVFrame* Frame;
-            //     int DidRead = ReadRingBuffer(AudioBuffer, &Frame, 1);
-            //     if (DidRead) {
-            //         QueueAudioFrame(Frame, Video);
-            //         av_frame_free(&Frame);
-            //     }
-            // }
-
-            // printf("****** CHANNEL: %i VIDEOAUDIO: %i \n", GetAudioChannelCapacity(Video), GetRingBufferReadAvailable(AudioBuffer));
-            CaughtUp = true;
-        } else if (CurrPTS < Now && NextPTS < Now) {
-            printf("MISSED\n");
-            AdvanceRingBufferReadIndex(AudioBuffer, 2);
-            av_frame_free(&CurrFrame);
-            av_frame_free(&NextFrame);
-        } else if (CurrPTS > Now && NextPTS > Now) {
-            // printf("WAITING\n");
-            CaughtUp = true;
-        }
+    // Enqueue audio
+    AVFrame* AudioFrame = NULL;
+    GetCurrentFrame("A", Video, &Video->AudioStream, &AudioFrame);
+    if (AudioFrame) {
+        QueueAudioFrame(AudioFrame, Video);
+        av_frame_free(&AudioFrame);
     }
 
     if (Video->EndOfStream) {
-        Video->VideoDidSeek = true;
         Video->EndOfStream = 0;
         printf("SEEKING\n");
         SeekVideo(Video, 0);

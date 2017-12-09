@@ -49,8 +49,6 @@ typedef struct {
     pthread_t DecodeThread;
     bool StopDecodeThread;
 
-    bool VideoDidSeek;
-    AVFrame* PendingVideoFrame;
 } video;
 
 // These functions should only be called

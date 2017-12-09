@@ -69,6 +69,10 @@ int AudioThreadCallback(
             *OutLeft++  += Amp;
             *OutRight++ += Amp;
         }
+
+        if (!FoundSomethin) {
+            if (ChannelIndex == 0) printf("AUDIO THREAD STARVED\n");
+        }
     }
 
     return 0;
