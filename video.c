@@ -12,6 +12,10 @@
 
 void TickVideo(video* Video);
 
+double GetVideoFrameDuration(video* Video);
+double GetVideoTime(video* Video);
+void SeekVideo(video* Video, double Timestamp);
+
 void DecodeNextFrame(video* Video);
 
 double GetTimeInSeconds() {
@@ -253,7 +257,7 @@ void UpdateVideoFrame(video* Video) {
     if (Frame) {
         double FramePTS = Frame->pts * Video->VideoStream.Timebase;
         double VideoTime = GetVideoTime(Video);
-        // printf("FRAME: %f NOW: %f\n", FramePTS, VideoTime);
+
         if (FramePTS <= VideoTime) {
 
             // FIXME: Keep dequeuing frames here until FramePTS > VideoTime.

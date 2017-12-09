@@ -52,13 +52,18 @@ typedef struct {
     AVFrame* PendingVideoFrame;
 } video;
 
+// These functions should only be called
+// from a single thread which has an OpenGL
+// context.
+
 video* OpenVideo(const char* InputFilename, NVGcontext* NVG, audio_state* AudioState);
 
-double GetVideoFrameDuration(video* Video);
-double GetVideoTime(video* Video);
-void SeekVideo(video* Video, double Timestamp);
 void FreeVideo(video* Video, NVGcontext* NVG);
 
+// Uploads a frame to the graphics
+// card when that frame's presentation
+// time arrives.
+// Should be called as fast as possible.
 void UpdateVideoFrame(video* Video);
 
 #endif // VIDEO_H
