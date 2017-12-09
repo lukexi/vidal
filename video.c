@@ -7,7 +7,7 @@
 #include <pthread.h>
 #include <assert.h>
 
-#define FRAME_BUFFER_SIZE 32 // Must be power of 2
+#define FRAME_BUFFER_SIZE 128 // Must be power of 2
 #define HALF_FRAME_BUFFER_SIZE (FRAME_BUFFER_SIZE / 2)
 
 void DecodeVideo(video* Video);
