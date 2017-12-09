@@ -17,4 +17,4 @@ SOURCES+=nanovg.c
 SOURCES+=mvar.c
 
 vidal.app: $(SOURCES)
-	clang -o $@.app $^ $(FLAGS) -g -Wall
+	clang -o $@ $^ $(FLAGS) -g -Wall

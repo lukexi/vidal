@@ -12,6 +12,7 @@
 
 void DecodeVideo(video* Video);
 
+double GetFramePTS(AVFrame* Frame, stream* Stream);
 double GetVideoFrameDuration(video* Video);
 double GetVideoTime(video* Video);
 void SeekVideo(video* Video, double Timestamp);
@@ -256,7 +257,7 @@ void TickVideo(video* Video) {
     }
 
     if (Frame) {
-        double FramePTS = Frame->pts * Video->VideoStream.Timebase;
+        double FramePTS  = GetFramePTS(Frame, &Video->VideoStream);
         double VideoTime = GetVideoTime(Video);
 
         if (FramePTS <= VideoTime) {
@@ -325,13 +326,24 @@ void DecodeVideo(video* Video) {
     // const double Now = GetVideoTime(Video);
 
     // Send in audio
-    NumBufferedAudioFrames = GetRingBufferReadAvailable(&Video->AudioStream.Buffer);
-    ring_buffer_size_t AudioBufferCapacity = CheckAudioBuffer(Video);
-    if (NumBufferedAudioFrames > 0 && AudioBufferCapacity > 0) {
-        AVFrame* Frame = NULL;
-        ReadRingBuffer(&Video->AudioStream.Buffer, &Frame, 1);
-        QueueAudioFrame(Frame, Video);
-        av_frame_free(&Frame);
+    bool CaughtUp = false;
+
+    while (!CaughtUp) {
+        NumBufferedAudioFrames = GetRingBufferReadAvailable(&Video->AudioStream.Buffer);
+        ring_buffer_size_t AudioBufferCapacity = CheckAudioBuffer(Video);
+        if (NumBufferedAudioFrames > 0 && AudioBufferCapacity > 0) {
+            AVFrame* Frame = NULL;
+            ReadRingBuffer(&Video->AudioStream.Buffer, &Frame, 1);
+            if (GetFramePTS(Frame, &Video->AudioStream) >= GetVideoTime(Video)) {
+                CaughtUp = true;
+                QueueAudioFrame(Frame, Video);
+            } else {
+                printf("SKIPPING AN AUDIO FRAME\n");
+            }
+            av_frame_free(&Frame);
+        } else {
+            CaughtUp = true;
+        }
     }
 
     if (Video->EndOfStream) {
@@ -340,6 +352,10 @@ void DecodeVideo(video* Video) {
         printf("SEEKING\n");
         SeekVideo(Video, 0);
     }
+}
+
+double GetFramePTS(AVFrame* Frame, stream* Stream) {
+    return Frame->pts * Stream->Timebase;
 }
 
 double GetVideoFrameDuration(video* Video) {

@@ -3,28 +3,30 @@
 #include <stdbool.h>
 #include "shader.h"
 #include "quad.h"
-// #include "texture.h"
-// #include "pa_ringbuffer.h"
+#include "utils.h"
 #include "video-audio.h"
 #include "video.h"
-// #include <portaudio.h>
 #define NANOVG_GL3_IMPLEMENTATION
 #include "nanovg_gl.h"
 
 
-void DrawVideo(video* Video, GLuint QuadProgram, GLuint Quad)
+typedef struct {
+    video* Video;
+    GLuint Quad;
+} video_quad;
+
+void DrawVideo(video_quad* VideoQuad, GLuint QuadProgram)
 {
-    if (!Video) return;
+    if (!VideoQuad || !VideoQuad->Video) return;
 
     glUniform1i(glGetUniformLocation(QuadProgram, "uTex"), 0);
 
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, Video->Texture);
+    glBindTexture(GL_TEXTURE_2D, VideoQuad->Video->Texture);
 
-    glBindVertexArray(Quad);
+    glBindVertexArray(VideoQuad->Quad);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
-
 
 
 int main(int argc, char const *argv[])
@@ -49,38 +51,45 @@ int main(int argc, char const *argv[])
     SDL_GL_SetSwapInterval(0);
     InitGLEW();
 
-    NVGcontext* NVG = nvgCreateGL3(0);
-
-    // video* Video = OpenVideo("videos/pinball.mov");
-    // video* Video = OpenVideo("videos/mario.mp4");
-    // video* Video1 = OpenVideo("videos/Martin_Luther_King_PBS_interview_with_Kenneth_B._Clark_1963.mp4", NVG, AudioState);
-    // video* Video1 = OpenVideo("videos/timeline-students.mov", NVG, AudioState);
-    // video* Video2 = OpenVideo("videos/timeline-research-gallery.mov", NVG, AudioState);
-    // video* Video2 = OpenVideo("videos/best_token_table_clip_sm2.mp4", NVG, AudioState);
-    // video* Video2 = OpenVideo("videos/Luge 8-6-2016.m4a", NVG, AudioState);
-    video* Video1 = OpenVideo("videos/tmnt.mp4", NVG, AudioState);
-    // video* Video2 = OpenVideo("videos/tmnt.mp4", NVG, AudioState);
-
     GLuint QuadProgram = CreateVertFragProgramFromPath(
         "quad.vert",
         "quad.frag");
     glUseProgram(QuadProgram);
 
-    float Verts1[8] = {
-        -1, -1, // Left Top
-        -1, 0,  // Left Bottom
-        0, -1,  // Right Top
-        0, 0    // Right Bottom
-    };
-    GLuint Quad1 = CreateQuad(Verts1);
+    NVGcontext* NVG = nvgCreateGL3(0);
 
-    // float Verts2[8] = {
-    //     0, 0, // Left Top
-    //     0, 1,  // Left Bottom
-    //     1, 0,  // Right Top
-    //     1, 1    // Right Bottom
-    // };
-    // GLuint Quad2 = CreateQuad(Verts2);
+
+    const char* VideoNames[] = {
+        "videos/Martin_Luther_King_PBS_interview_with_Kenneth_B._Clark_1963.mp4",
+        "videos/tmnt.mp4",
+        "videos/timeline-students.mov",
+        "videos/best_token_table_clip_sm2.mp4",
+        // "videos/Luge 8-6-2016.m4a"
+    };
+
+    const size_t NumVideos = ARRAY_LEN(VideoNames);
+    const float BoxSize = 1.0/NumVideos;
+    video_quad* VideoQuads = calloc(NumVideos, sizeof(video_quad));
+    for (int QuadIndex = 0; QuadIndex < NumVideos; QuadIndex++)
+    {
+        video_quad* VideoQuad = &VideoQuads[QuadIndex];
+        const char* VideoName = VideoNames[QuadIndex];
+
+        VideoQuad->Video = OpenVideo(VideoName, NVG, AudioState);
+
+        const float X0 = BoxSize * (QuadIndex + 0) * 2 - 1;
+        const float X1 = BoxSize * (QuadIndex + 1) * 2 - 1;
+        const float Y0 = 0 - BoxSize;
+        const float Y1 = 0 + BoxSize;
+
+        const float Vertices[8] = {
+            X0, Y0,  // Left Top
+            X0, Y1,  // Left Bottom
+            X1, Y0,  // Right Top
+            X1, Y1   // Right Bottom
+        };
+        VideoQuad->Quad = CreateQuad(Vertices);
+    }
 
     while (1) {
 
@@ -89,20 +98,23 @@ int main(int argc, char const *argv[])
             if (Event.type == SDL_QUIT) exit(0);
         }
 
-        TickVideo(Video1);
-        // TickVideo(Video2);
 
         glClearColor(0, 0.1, 0.1, 1);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        DrawVideo(Video1, QuadProgram, Quad1);
-        // DrawVideo(Video2, QuadProgram, Quad2);
+        for (int QuadIndex = 0; QuadIndex < NumVideos; QuadIndex++) {
+            video_quad* VideoQuad = &VideoQuads[QuadIndex];
+            TickVideo(VideoQuad->Video);
+            DrawVideo(VideoQuad, QuadProgram);
+        }
 
         SDL_GL_SwapWindow(Window);
     }
 
-    FreeVideo(Video1);
-    // FreeVideo(Video2);
+    for (int QuadIndex = 0; QuadIndex < NumVideos; QuadIndex++) {
+        video_quad* VideoQuad = &VideoQuads[QuadIndex];
+        FreeVideo(VideoQuad->Video);
+    }
 
     return 0;
 }
