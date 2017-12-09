@@ -44,12 +44,16 @@ void ReadRingBuffer(ringbuffer* RingBuffer,
         ElementCount);
 }
 
-ring_buffer_size_t WriteRingBuffer(ringbuffer *RingBuffer,
-    const void *Data,
+ring_buffer_size_t WriteRingBuffer(ringbuffer* RingBuffer,
+    const void* Data,
     ring_buffer_size_t ElementCount)
 {
     return PaUtil_WriteRingBuffer(
         &RingBuffer->RingBuffer,
         Data,
         ElementCount);
+}
+
+void FreeRingBuffer(ringbuffer* RingBuffer) {
+    free(RingBuffer->Storage);
 }

@@ -4,11 +4,13 @@
 #define NANOVG_GL3
 #include "nanovg_gl.h"
 #include "video-audio.h"
+#include <pthread.h>
+#include <assert.h>
 
-typedef struct {
-    void* Data;
+#define FRAME_BUFFER_SIZE 32
+#define HALF_FRAME_BUFFER_SIZE (FRAME_BUFFER_SIZE / 2)
 
-} bounded_queue;
+void TickVideo(video* Video);
 
 void DecodeNextFrame(video* Video);
 
@@ -55,25 +57,25 @@ void OpenCodec(
         return;
     }
 
-    for (int FrameIndex = 0; FrameIndex < QUEUE_FRAMES; FrameIndex++) {
-        Stream->FrameQueue[FrameIndex].Frame = av_frame_alloc();
-        if (!Stream->FrameQueue[FrameIndex].Frame) {
-            av_log(NULL, AV_LOG_ERROR, "Can't allocate frame\n");
-            // return AVERROR(ENOMEM);
-            return;
-        }
-
-        // Prevent initial blank frames from being presented
-        Stream->FrameQueue[FrameIndex].Presented = true;
-    }
-
     Stream->Timebase = av_q2d(FormatContext->streams[Stream->Index]->time_base);
 
     Stream->Valid = true;
 }
 
+void* DecodeThreadMain(void* Arg) {
+    video* Video = Arg;
+
+    bool StreamEnded = false;
+    while (!StreamEnded) {
+        TickVideo(Video);
+    }
+    return NULL;
+}
+
 video* OpenVideo(const char* InputFilename, NVGcontext* NVG, audio_state* AudioState) {
     video* Video = calloc(1, sizeof(video));
+
+    Video->AudioState = AudioState;
 
     int Result;
 
@@ -129,11 +131,10 @@ video* OpenVideo(const char* InputFilename, NVGcontext* NVG, audio_state* AudioS
                 );
     }
 
+    CreateRingBuffer(&Video->VideoStream.Buffer, sizeof(AVFrame*), FRAME_BUFFER_SIZE);
+    CreateRingBuffer(&Video->AudioStream.Buffer, sizeof(AVFrame*), FRAME_BUFFER_SIZE);
 
     Video->StartTime = GetTimeInSeconds();
-
-    // Load the first frame into the Video structure
-    DecodeNextFrame(Video);
 
     // printf("Opened %ix%i video with video format %s audio format %s\n",
     //     Video->Width, Video->Height,
@@ -142,6 +143,9 @@ video* OpenVideo(const char* InputFilename, NVGcontext* NVG, audio_state* AudioS
     //     );
 
     Video->AudioChannel = GetNextChannel(AudioState);
+
+    int ResultCode = pthread_create(&Video->DecodeThread, NULL, DecodeThreadMain, Video);
+    assert(!ResultCode);
 
     return Video;
 }
@@ -167,7 +171,7 @@ void DecodeNextFrame(video* Video) {
     }
 
     int StreamIndex = Video->Packet.stream_index;
-    stream* Stream        = NULL;
+    stream* Stream = NULL;
     if (StreamIndex == Video->AudioStream.Index) {
         Stream = &Video->AudioStream;
     } else if (StreamIndex == Video->VideoStream.Index) {
@@ -187,19 +191,21 @@ void DecodeNextFrame(video* Video) {
         return;
     }
 
-    int WriteHead = Stream->WriteHead;
-    queued_frame*   QFrame       = &Stream->FrameQueue[WriteHead];
+    AVFrame* Frame = av_frame_alloc();
 
-    Result = avcodec_receive_frame(CodecContext, QFrame->Frame);
+    Result = avcodec_receive_frame(CodecContext, Frame);
     if (Result != 0 && Result != AVERROR_EOF && Result != AVERROR(EAGAIN)) {
         av_log(NULL, AV_LOG_ERROR, "Error receiving frame\n");
         return;
     }
 
     if (Result == 0) {
-        Stream->WriteHead = (WriteHead + 1) % QUEUE_FRAMES;
-        QFrame->PTS = QFrame->Frame->pts * Stream->Timebase;
-        QFrame->Presented = false;
+        if (GetRingBufferWriteAvailable(&Stream->Buffer) > 0) {
+            WriteRingBuffer(&Stream->Buffer, &Frame, 1);
+        } else {
+            // Otherwise, we just drop the frame
+            av_frame_free(&Frame);
+        }
     }
 
     av_packet_unref(&Video->Packet);
@@ -210,6 +216,7 @@ void DecodeNextFrame(video* Video) {
         DecodeNextFrame(Video);
     }
 }
+
 
 void UploadVideoFrame(video* Video, AVFrame* Frame) {
     // Use https://www.ffmpeg.org/ffmpeg-scaler.html
@@ -229,7 +236,43 @@ void UploadVideoFrame(video* Video, AVFrame* Frame) {
     UpdateTexture(Video->Texture, Video->Width, Video->Height, GL_RGB, Video->ColorConvertBuffer);
 }
 
-void QueueAudioFrame(AVFrame* Frame, video* Video, audio_state* AudioState) {
+void UpdateVideoFrame(video* Video) {
+    if (Video->VideoDidSeek) {
+        Video->VideoDidSeek = false;
+        Video->PendingVideoFrame = NULL;
+    }
+
+    AVFrame* Frame = Video->PendingVideoFrame;
+
+    if (!Frame) {
+        ring_buffer_size_t FramesCount = GetRingBufferReadAvailable(&Video->VideoStream.Buffer);
+        if (FramesCount > 0) {
+            ReadRingBuffer(&Video->VideoStream.Buffer, &Frame, 1);
+        }
+    }
+
+    if (Frame) {
+        double FramePTS = Frame->pts * Video->VideoStream.Timebase;
+        double VideoTime = GetVideoTime(Video);
+        // printf("FRAME: %f NOW: %f\n", FramePTS, VideoTime);
+        if (FramePTS <= VideoTime) {
+            // printf("UPLOADING\n");
+            UploadVideoFrame(Video, Frame);
+            av_frame_free(&Frame);
+            Video->PendingVideoFrame = NULL;
+        } else {
+            Video->PendingVideoFrame = Frame;
+        }
+    }
+}
+
+ring_buffer_size_t CheckAudioBuffer(video* Video) {
+    audio_state* AudioState = Video->AudioState;
+    return GetRingBufferWriteAvailable(&AudioState->Channels[Video->AudioChannel].BlocksIn);
+}
+
+void QueueAudioFrame(AVFrame* Frame, video* Video) {
+    audio_state* AudioState = Video->AudioState;
     AVCodecContext* CodecContext = Video->AudioStream.CodecContext;
     int Length = av_samples_get_buffer_size(NULL,
         CodecContext->channels, Frame->nb_samples, CodecContext->sample_fmt, 0);
@@ -250,113 +293,65 @@ void QueueAudioFrame(AVFrame* Frame, video* Video, audio_state* AudioState) {
     WriteRingBuffer(&AudioState->Channels[Video->AudioChannel].BlocksIn, &AudioBlock, 1);
 }
 
-void MarkFramePresented(queued_frame* QFrame) {
-    QFrame->Presented = true;
-    av_frame_unref(QFrame->Frame);
+// bool FrameIsReady(queued_frame* Frame, double Now) {
+//     return !Frame->Presented && Now >= Frame->PTS;
+// }
+
+double GetVideoTime(video* Video) {
+    return GetTimeInSeconds() - Video->StartTime;
 }
 
-bool FrameIsReady(queued_frame* Frame, double Now) {
-    return !Frame->Presented && Now >= Frame->PTS;
-}
-
-// Checks if the decoder has outpaced us, and drops up to
-// MAX_FRAME_DROP frames if so.
-queued_frame* GetNextFrame(stream* Stream, double Now) {
-    if (!Stream->Valid) return NULL;
-
-    const int MAX_FRAME_DROP = QUEUE_FRAMES; // make this equal to QUEUE_FRAMES?
-    for (int Readahead = 0; Readahead < MAX_FRAME_DROP; Readahead++) {
-        int CurrHead = (Stream->ReadHead + Readahead)     % QUEUE_FRAMES;
-        int NextHead = (Stream->ReadHead + Readahead + 1) % QUEUE_FRAMES;
-        queued_frame* CurrFrame = &Stream->FrameQueue[CurrHead];
-        queued_frame* NextFrame = &Stream->FrameQueue[NextHead];
-
-        // If the current frame and the next frame are ready,
-        // drop the current frame.
-        if (FrameIsReady(CurrFrame, Now) && FrameIsReady(NextFrame, Now)) {
-            printf("DROPPING A FRAME\n");
-            MarkFramePresented(CurrFrame);
-        }
-        // If the current frame is ready and the next frame is not,
-        // return the current frame.
-        else if (FrameIsReady(CurrFrame, Now)) {
-            printf("Presenting! %f\n", CurrFrame->PTS);
-            Stream->ReadHead = NextHead;
-            return CurrFrame;
-        }
-    }
-    return NULL;
-}
-
-bool TickVideo(video* Video, audio_state* AudioState) {
+void TickVideo(video* Video) {
     if (!Video) {
-        return false;
+        return;
     }
 
-    const double Now = GetTimeInSeconds() - Video->StartTime;
+    ring_buffer_size_t NumBufferedVideoFrames = GetRingBufferReadAvailable(&Video->VideoStream.Buffer);
+    ring_buffer_size_t NumBufferedAudioFrames = GetRingBufferReadAvailable(&Video->AudioStream.Buffer);
 
-    // FIXME: Pull along the audio/video ReadHeads until the PTS is roughly in sync
-    queued_frame* VideoFrame = GetNextFrame(&Video->VideoStream, Now);
-    if (VideoFrame) {
-        printf("VIDEO FRAME\n");
-        UploadVideoFrame(Video, VideoFrame->Frame);
-        MarkFramePresented(VideoFrame);
-    }
-
-    queued_frame* AudioFrame = GetNextFrame(&Video->AudioStream, Now);
-    if (AudioFrame) {
-        printf("AUDIO FRAME\n");
-        QueueAudioFrame(AudioFrame->Frame, Video, AudioState);
-        MarkFramePresented(AudioFrame);
-    }
-
-    if (VideoFrame) {
-        // If Now has gotten significantly ahead of the video,
-        // buffer up some frames
-        double Ahead = (Now - VideoFrame->PTS);
-
-        // AVCodecContext* CodecContext = Video->VideoStream.CodecContext;
-
-        double FrameDur = Video->VideoStream.Timebase * 1000;
-
-        // printf("FrameDur %f\n", FrameDur);
-        int NumFramesToBuffer = floor(Ahead / FrameDur);
-        printf("Number of frames to buffer: %i\n", NumFramesToBuffer);
-        if (NumFramesToBuffer) {
-            // printf("%i\n", NumFramesToBuffer);
-            // NumFramesToBuffer += 1;
-            printf("BUFFERING %i\n", NumFramesToBuffer);
-            // printf("NOW: %f\n", Now);
-            // printf("PTS: %f\n", VideoFrame->PTS);
-            // printf("AHEAD BY %f\n", Ahead);
-            for (int i = 0; i < NumFramesToBuffer; i++) {
-                DecodeNextFrame(Video);
-            }
-        }
-    }
-    if (AudioFrame || VideoFrame) {
+    // printf("Number of buffered audio frames: %i\n", NumBufferedAudioFrames);
+    // printf("Number of buffered video frames: %i\n", NumBufferedVideoFrames);
+    if (
+        // NumBufferedAudioFrames < HALF_FRAME_BUFFER_SIZE ||
+        NumBufferedVideoFrames < HALF_FRAME_BUFFER_SIZE) {
         DecodeNextFrame(Video);
     }
 
+    // const double Now = GetVideoTime(Video);
+
+    // Send in audio
+    NumBufferedAudioFrames = GetRingBufferReadAvailable(&Video->AudioStream.Buffer);
+    ring_buffer_size_t AudioBufferCapacity = CheckAudioBuffer(Video);
+    if (NumBufferedAudioFrames > 0 && AudioBufferCapacity > 0) {
+        AVFrame* Frame = NULL;
+        ReadRingBuffer(&Video->AudioStream.Buffer, &Frame, 1);
+        QueueAudioFrame(Frame, Video);
+        av_frame_free(&Frame);
+    }
+
     if (Video->EndOfStream) {
+        Video->VideoDidSeek = true;
         Video->EndOfStream = 0;
         printf("SEEKING\n");
         SeekVideo(Video, 0);
     }
+}
 
-
-
-    return AudioFrame || VideoFrame;
+double GetVideoFrameDuration(video* Video) {
+    return Video->VideoStream.Timebase * 1000;
 }
 
 void FlushStream(stream* Stream) {
     if (!Stream->Valid) return;
 
     avcodec_flush_buffers(Stream->CodecContext);
-    Stream->ReadHead  = 0;
-    Stream->WriteHead = 0;
-    for (int FrameIndex = 0; FrameIndex < QUEUE_FRAMES; FrameIndex++) {
-        MarkFramePresented(&Stream->FrameQueue[FrameIndex]);
+
+    ring_buffer_size_t FramesCount = GetRingBufferReadAvailable(&Stream->Buffer);
+
+    for (int I = 0; I < FramesCount; I++) {
+        AVFrame* Frame = NULL;
+        ReadRingBuffer(&Stream->Buffer, &Frame, 1);
+        av_frame_free(&Frame);
     }
 }
 
@@ -378,8 +373,6 @@ void SeekVideo(video* Video, double Timestamp) {
     }
 
     Video->StartTime = GetTimeInSeconds() - Timestamp;
-
-    DecodeNextFrame(Video);
 }
 
 void FreeVideo(video* Video, NVGcontext* NVG) {
@@ -393,24 +386,23 @@ void FreeVideo(video* Video, NVGcontext* NVG) {
         sws_freeContext(Video->ColorConvertContext);
         free(Video->ColorConvertBuffer);
 
-        for (int FrameIndex = 0; FrameIndex < QUEUE_FRAMES; FrameIndex++) {
-            av_frame_free(&Video->VideoStream.FrameQueue[FrameIndex].Frame);
-        }
+        FlushStream(&Video->VideoStream);
 
         avcodec_close(Video->VideoStream.CodecContext);
         avcodec_free_context(&Video->VideoStream.CodecContext);
     }
 
     if (Video->AudioStream.Valid) {
-        for (int FrameIndex = 0; FrameIndex < QUEUE_FRAMES; FrameIndex++) {
-            av_frame_free(&Video->AudioStream.FrameQueue[FrameIndex].Frame);
-        }
+        FlushStream(&Video->AudioStream);
 
         avcodec_close(Video->AudioStream.CodecContext);
         avcodec_free_context(&Video->AudioStream.CodecContext);
     }
 
     avformat_close_input(&Video->FormatContext);
+
+    FreeRingBuffer(&Video->VideoStream.Buffer);
+    FreeRingBuffer(&Video->AudioStream.Buffer);
 
     free(Video);
 }

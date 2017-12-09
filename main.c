@@ -15,6 +15,8 @@
 void DrawVideo(video* Video, GLuint QuadProgram, GLuint Quad)
 {
     if (!Video) return;
+    UpdateVideoFrame(Video);
+
     glUniform1i(glGetUniformLocation(QuadProgram, "uTex"), 0);
 
     glActiveTexture(GL_TEXTURE0);
@@ -82,8 +84,6 @@ int main(int argc, char const *argv[])
     // GLuint Quad2 = CreateQuad(Verts2);
 
     while (1) {
-        TickVideo(Video1, AudioState);
-        // TickVideo(Video2, AudioState);
 
         SDL_Event Event;
         while (SDL_PollEvent(&Event)) {

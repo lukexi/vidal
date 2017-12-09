@@ -9,25 +9,15 @@
 #include "nanovg.h"
 #include "video-audio.h"
 #include <stdbool.h>
-
-
-#define QUEUE_FRAMES 60
+#include "mvar.h"
 
 typedef struct {
-    AVFrame* Frame;
-    double PTS;
-    bool Presented;
-} queued_frame;
-
-typedef struct {
-    bool Valid;
-    int Index;
-    queued_frame FrameQueue[QUEUE_FRAMES];
-    int ReadHead;
-    int WriteHead;
+    bool               Valid;
+    int                Index;
+    ringbuffer         Buffer;
     AVCodec*           Codec;
     AVCodecContext*    CodecContext;
-    double Timebase;
+    double             Timebase;
 } stream;
 
 typedef struct {
@@ -51,13 +41,23 @@ typedef struct {
     int      NVGImage;
 
     double StartTime;
+
     int AudioChannel;
+    audio_state* AudioState;
+
+    pthread_t DecodeThread;
+
+    bool VideoDidSeek;
+    AVFrame* PendingVideoFrame;
 } video;
 
 video* OpenVideo(const char* InputFilename, NVGcontext* NVG, audio_state* AudioState);
 
-bool TickVideo(video* Video, audio_state* AudioState);
+double GetVideoFrameDuration(video* Video);
+double GetVideoTime(video* Video);
 void SeekVideo(video* Video, double Timestamp);
 void FreeVideo(video* Video, NVGcontext* NVG);
+
+void UpdateVideoFrame(video* Video);
 
 #endif // VIDEO_H

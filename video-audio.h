@@ -7,7 +7,7 @@
 #define SAMPLE_RATE 44100
 #define BLOCK_SIZE 128
 
-#define AUDIO_QUEUE 16 // must be power of 2
+#define AUDIO_QUEUE 32 // must be power of 2
 
 #define NUM_CHANNELS 16
 
