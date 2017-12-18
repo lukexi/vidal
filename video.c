@@ -331,14 +331,21 @@ void DecodeVideo(video* Video) {
 
     // printf("Number of buffered audio frames: %i\n", NumBufferedAudioFrames);
     // printf("Number of buffered video frames: %i\n", NumBufferedVideoFrames);
-    if (
-        NumBufferedAudioFrames < HALF_FRAME_BUFFER_SIZE
-        // NumBufferedVideoFrames < HALF_FRAME_BUFFER_SIZE
-        ) {
-        // printf("DECODING A BUNCHA SHIT\n");
-        DecodeNextFrame(Video);
-    }
 
+    // See if we should decode anything based on how much we have buffered
+    if (!Video->EndOfStream) {
+        // If we have an audio stream, use the audio buffer as the criterion.
+        // (otherwise video gets ahead of the audio)
+        // If there's no audio stream, use the video buffer as the criterion.
+        bool NeedAudio = NumBufferedAudioFrames < HALF_FRAME_BUFFER_SIZE;
+        bool NeedVideo = NumBufferedVideoFrames < HALF_FRAME_BUFFER_SIZE;
+        if (   ( Video->AudioStream.Valid && NeedAudio)
+            || (!Video->AudioStream.Valid && NeedVideo)
+            )
+        {
+            DecodeNextFrame(Video);
+        }
+    }
 
     // Enqueue audio
     AVFrame* AudioFrame = NULL;
