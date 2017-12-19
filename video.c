@@ -36,7 +36,9 @@ void OpenCodec(
         return;
     }
 
-    AVCodecParameters* CodecParams = FormatContext->streams[Stream->Index]->codecpar;
+    Stream->Stream = FormatContext->streams[Stream->Index];
+
+    AVCodecParameters* CodecParams = Stream->Stream->codecpar;
     Stream->Codec = avcodec_find_decoder(CodecParams->codec_id);
     if (Stream->Codec == NULL) {
         av_log(NULL, AV_LOG_ERROR, "Can't find decoder\n");
@@ -62,7 +64,7 @@ void OpenCodec(
         return;
     }
 
-    Stream->Timebase = av_q2d(FormatContext->streams[Stream->Index]->time_base);
+    Stream->Timebase = av_q2d(Stream->Stream->time_base);
 
     Stream->Valid = true;
 }
@@ -203,6 +205,7 @@ void DecodeNextFrame(video* Video) {
         av_log(NULL, AV_LOG_ERROR, "Error receiving frame\n");
         return;
     }
+    // printf("PACKET RECEIVED: %i\n", Result);
 
     if (Result == 0) {
         if (GetRingBufferWriteAvailable(&Stream->Buffer) > 0) {
@@ -211,13 +214,22 @@ void DecodeNextFrame(video* Video) {
             // Otherwise, we just drop the frame
             av_frame_free(&Frame);
         }
+    } else {
+        av_frame_free(&Frame);
     }
 
     av_packet_unref(&Video->Packet);
     av_init_packet(&Video->Packet);
 
+    if (Video->EndOfStream) {
+        // Write a null frame to indicate that the stream is over
+        Frame = NULL;
+        if (GetRingBufferWriteAvailable(&Stream->Buffer) > 0) {
+            WriteRingBuffer(&Stream->Buffer, &Frame, 1);
+        }
+    }
+
     if (Result == AVERROR(EAGAIN)) {
-        printf("Buffering...\n");
         DecodeNextFrame(Video);
     }
 }
@@ -242,9 +254,28 @@ void UploadVideoFrame(video* Video, AVFrame* Frame) {
 }
 
 
-void GetCurrentFrame(const char* Label, video* Video, stream* Stream, AVFrame** Frame) {
+void GetCurrentFrame(video* Video, stream* Stream, AVFrame** Frame) {
     const double Now = GetVideoTime(Video);
 
+    // Handle the case where we only have 1 frame left
+    if (GetRingBufferReadAvailable(&Stream->Buffer) == 1) {
+        AVFrame* CurrFrame = NULL;
+        PeekRingBuffer(&Stream->Buffer, &CurrFrame, 1);
+        if (CurrFrame == NULL) {
+            SeekVideo(Video, 0);
+            return;
+        }
+
+        const double CurrPTS = GetFramePTS(CurrFrame, Stream);
+        if (CurrPTS <= Now) {
+            *Frame = CurrFrame;
+            AdvanceRingBufferReadIndex(&Stream->Buffer, 1);
+            return;
+        }
+    }
+
+    // Otherwise use the next two frames to decide if we should
+    // present a frame, drop it, or wait.
     bool CaughtUp = false;
     while ((!CaughtUp) &&
             GetRingBufferReadAvailable(&Stream->Buffer) >= 2)
@@ -254,23 +285,33 @@ void GetCurrentFrame(const char* Label, video* Video, stream* Stream, AVFrame** 
 
         AVFrame* CurrFrame = Frames[0];
         AVFrame* NextFrame = Frames[1];
+        if (CurrFrame != NULL && NextFrame == NULL) {
+            *Frame = CurrFrame;
+            AdvanceRingBufferReadIndex(&Stream->Buffer, 1);
+            return;
+        }
+
+        if (CurrFrame == NULL) {
+            SeekVideo(Video, 0);
+            return;
+        }
 
         const double CurrPTS = GetFramePTS(CurrFrame, Stream);
         const double NextPTS = GetFramePTS(NextFrame, Stream);
 
         if (CurrPTS <= Now &&
             NextPTS >  Now) {
-            // printf("%s NOW: %f FRAME: %f \n", Label, Now, CurrPTS);
+            // It's time, present it!
             *Frame = CurrFrame;
             AdvanceRingBufferReadIndex(&Stream->Buffer, 1);
             CaughtUp = true;
         } else if (CurrPTS < Now && NextPTS < Now) {
-            // Drop the frame
+            // We're behind, drop the frame
             AdvanceRingBufferReadIndex(&Stream->Buffer, 1);
             printf("DROPPING A FRAME\n");
             av_frame_free(&CurrFrame);
         } else if (CurrPTS > Now && NextPTS > Now) {
-            // Not time for this frame yet
+            // Not time for this frame yet, wait.
             CaughtUp = true;
         }
     }
@@ -280,7 +321,7 @@ void GetCurrentFrame(const char* Label, video* Video, stream* Stream, AVFrame** 
 void TickVideo(video* Video) {
 
     AVFrame* VideoFrame = NULL;
-    GetCurrentFrame("V", Video, &Video->VideoStream, &VideoFrame);
+    GetCurrentFrame(Video, &Video->VideoStream, &VideoFrame);
     if (VideoFrame) {
         UploadVideoFrame(Video, VideoFrame);
         av_frame_free(&VideoFrame);
@@ -349,16 +390,10 @@ void DecodeVideo(video* Video) {
 
     // Enqueue audio
     AVFrame* AudioFrame = NULL;
-    GetCurrentFrame("A", Video, &Video->AudioStream, &AudioFrame);
+    GetCurrentFrame(Video, &Video->AudioStream, &AudioFrame);
     if (AudioFrame) {
         QueueAudioFrame(AudioFrame, Video);
         av_frame_free(&AudioFrame);
-    }
-
-    if (Video->EndOfStream) {
-        Video->EndOfStream = 0;
-        printf("SEEKING\n");
-        SeekVideo(Video, 0);
     }
 }
 
@@ -380,7 +415,10 @@ void FlushStream(stream* Stream) {
     for (int I = 0; I < FramesCount; I++) {
         AVFrame* Frame = NULL;
         ReadRingBuffer(&Stream->Buffer, &Frame, 1);
-        av_frame_free(&Frame);
+        if (Frame != NULL) {
+            av_frame_free(&Frame);
+        }
+
     }
 }
 
@@ -390,17 +428,18 @@ void SeekVideo(video* Video, double Timestamp) {
     if (Video->VideoStream.Valid) {
         int64_t VideoPTS = Timestamp / Video->VideoStream.Timebase;
         av_seek_frame(Video->FormatContext, Video->VideoStream.Index,
-            VideoPTS, AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_ANY);
+            VideoPTS, AVSEEK_FLAG_BACKWARD);
         FlushStream(&Video->VideoStream);
     }
 
     if (Video->AudioStream.Valid) {
         int64_t AudioPTS = Timestamp / Video->AudioStream.Timebase;
         av_seek_frame(Video->FormatContext, Video->AudioStream.Index,
-            AudioPTS, AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_ANY);
+            AudioPTS, AVSEEK_FLAG_BACKWARD);
         FlushStream(&Video->AudioStream);
     }
 
+    Video->EndOfStream = false;
     Video->StartTime = GetTimeInSeconds() - Timestamp;
 }
 

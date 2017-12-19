@@ -71,7 +71,7 @@ int AudioThreadCallback(
         }
 
         if (!FoundSomethin) {
-            if (ChannelIndex == 0) printf("AUDIO THREAD STARVED\n");
+            // if (ChannelIndex == 0) printf("AUDIO THREAD STARVED\n");
         }
     }
 

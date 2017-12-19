@@ -17,6 +17,7 @@ typedef struct {
     ringbuffer         Buffer;
     AVCodec*           Codec;
     AVCodecContext*    CodecContext;
+    AVStream*          Stream;
     double             Timebase;
 } stream;
 
@@ -48,7 +49,6 @@ typedef struct {
 
     pthread_t DecodeThread;
     bool StopDecodeThread;
-
 } video;
 
 // These functions should only be called
